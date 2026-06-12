@@ -20,23 +20,41 @@ A native iOS application built in SwiftUI that mimics the Nothing OS dashboard.
 *   **Share Extension**: Send photos and files directly from the iOS Photos/Files app Share Sheet.
 *   **Haptic Proximity**: Taptic Engine pulses when a device is nearby, creating a physical "AirDrop" feel.
 
-### 2. Unified Clipboard & Drop (macOS)
-A background Python daemon that handles the "invisible" heavy lifting.
-*   **Event-Driven Sync**: Optimized for macOS with `changeCount` monitoring—instantly detects clipboard changes with near-zero CPU overhead.
-*   **Multimedia Support**: Now supports **Images**! Copy an image on Mac, and it’s instantly pushed to your Nothing Phone.
-*   **Nothing Drop**: A high-performance folder watcher (`watchdog`) on your Mac. Drag any file into `~/NothingDrop`, and it’s pushed to your phone via ADB in real-time.
-*   **Zero-Lag Protocol**: Multi-threaded ADB operations ensure that one transfer doesn't block the next.
+### 2. Unified Clipboard & Drop v2.0 (macOS)
+A state-of-the-art Python daemon powered by PyObjC that turns your macOS menu bar into a Nothing control center.
+*   **Zero-Latency ADB Streaming**: Completely eliminates polling. A persistent ADB shell monitors Android clipboard and files, reducing CPU usage to zero and latency to <50ms.
+*   **Native Menu Bar App**: A beautiful `NSStatusItem` built into the macOS menu bar. Shows real-time Nothing Phone battery, charging status (`⚪️ ⚡️ 78%`), and connection state.
+*   **Clipboard History**: Built-in SQLite database stores your last 50 clipboard items. Instantly push any past item back to your phone from the Mac menu bar.
+*   **Bi-Directional Smart Routing**:
+    *   **Mac -> Phone**: Drag files into `~/NothingDrop` and they are instantly pushed.
+    *   **Phone -> Mac**: Drop files into `/sdcard/Download/NothingDrop/ToMac/`. The Mac auto-pulls them and intelligently routes `.jpg`/`.png` to your `Pictures` folder and `.pdf`/`.docx` to your `Documents` folder.
+*   **Spotlight Integration**: Files pulled from the phone are immediately indexed via `mdimport` for instant Cmd+Space searching.
+*   **Focus Sync**: Automatically synchronizes macOS Do Not Disturb with Android's `zen_mode` in real-time.
+*   **Glyph Notifications**: Triggers the Nothing Phone's native Essential Glyph light when files or clipboards are received from the Mac using high-priority `cmd notification post` commands.
 
 ---
+
+## 🏗 Architecture Overview
+
+The system operates entirely via a single-process PyObjC macOS daemon, creating a zero-bloat, direct-device bridge.
+
+```mermaid
+graph TD
+    Mac[macOS PyObjC Daemon] <-->|Persistent ADB Shell Stream| Android[Nothing Phone Shell]
+    Mac --> MenuBar[Native macOS Menu Bar App]
+    Mac --> Spotlight[macOS Spotlight Indexing]
+    Mac --> SQLite[(Clipboard History DB)]
+    Android --> Glyph[Essential Glyph Notification]
+    Android --> ClipboardMgr[Android Clipboard]
+```
 
 ## ⚡️ Pro-Level Optimizations
-Unlike basic sync tools, this project is built for performance:
-*   **Memory Efficiency**: Files are streamed directly from disk to network, never loaded entirely into memory.
-*   **Async Core**: The Python daemon uses non-blocking threads for ADB calls to ensure the clipboard sync never "hangs."
-*   **Stable Discovery**: Bonjour services are identified by unique service names, ensuring your "Nearby" list is rock-solid.
+Unlike basic sync tools, this project is built for maximum performance:
+*   **Zero-Process Spawning**: The backend no longer spawns `adb` commands periodically. It reads directly from a continuous `stdout` stream originating from a single background Android shell.
+*   **Memory Efficiency**: Files are streamed directly via `adb pull`/`push` without loading into system RAM.
+*   **Smart Auto-Connect**: Bonjour scanning auto-detects Android Wireless Debugging ports (`_adb-tls-connect._tcp`) to reconnect automatically when you join your home Wi-Fi.
 
-
----
+----
 
 ## 🛠 Setup Guide
 
