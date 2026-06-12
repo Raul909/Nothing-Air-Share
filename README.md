@@ -73,6 +73,9 @@ python3 unified_sync.py
   - Documents (.pdf, .txt, etc.) go to `~/Documents/NothingDrop/`
   - Other files go to `~/NothingDrop/`
   - All pulled files are indexed instantly for macOS Spotlight search (`Cmd+Space`).
+- **P2P Wi-Fi Sharing (AirDrop-like Direct Socket)**:
+  - **Phone ➔ Mac**: Open the app on your phone, see your MacBook under **Nearby Devices**, tap **SEND**, select a file, and accept the macOS confirmation dialog to stream it directly over local Wi-Fi.
+  - **Mac ➔ Phone**: Click on your Nothing Phone's name under **"Nearby Share Devices"** in the Mac menu bar dot menu, choose a file, and accept the confirmation dialog on your phone to stream it directly.
 - **iPhone ➔ Nothing Phone**: AirDrop any file natively from your iPhone to your Mac. The Mac daemon watches the `~/Downloads` directory for AirDropped files and automatically forwards them to the Nothing Phone over ADB.
 - **Nothing Phone ➔ iPhone**: When a file is pulled from your phone, the Mac menu bar icon updates with a new action: **"AirDrop '[filename]' to iOS..."**. Clicking it immediately opens macOS's native AirDrop share sheet, allowing you to send it to your iPhone with a single click.
 
