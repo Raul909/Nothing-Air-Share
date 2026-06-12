@@ -54,6 +54,34 @@ A background Python daemon that handles the "invisible" heavy lifting.
 
 ---
 
+## 🌍 How to Host & Use
+
+This project is designed to be self-hosted. Since it's a private bridge between your personal devices, there is no "central server" to sign up for. You are the host.
+
+### 📱 For iOS (The App)
+*   **Personal Use**: Open the project in Xcode and build it directly to your iPhone using a free Apple Developer account.
+*   **Distributing to Friends**: If you want others to use your version, you can host it via **Apple TestFlight** (requires a paid Developer Program membership) or distribute the `.ipa` file for sideloading (e.g., via AltStore).
+*   **Updates**: To update the app, simply pull the latest changes from Git and re-deploy via Xcode.
+
+### 💻 For macOS (The Sync Engine)
+The sync engine runs locally on your Mac. 
+*   **Deployment**: I have included a `com.nothing.clipboard-sync.plist` file. Moving this to `~/Library/LaunchAgents` ensures the sync service runs in the background and starts automatically whenever you log in.
+*   **Headless Hosting**: You can even run the Python scripts on a home server (like a Mac Mini) to act as a permanent bridge for your home network.
+
+---
+
+## 🛠 Version Control & Contributing
+
+We use **Git** for version control. If you're looking to help improve the Nothing ecosystem:
+
+1.  **Fork** the repository on GitHub.
+2.  **Clone** your fork: `git clone https://github.com/yourusername/nothing-airshare.git`
+3.  **Create a Branch**: `git checkout -b feature/amazing-new-widget`
+4.  **Commit your changes**: `git commit -m "Add a cool new feature"`
+5.  **Push and Open a PR**: We love seeing how the community adapts the Nothing aesthetic!
+
+---
+
 ## 🖤 Aesthetic Credits
 This project is a tribute to the design language of [Nothing](https://nothing.tech). All rights to the "Nothing" brand and aesthetic belong to them. We're just fans trying to build a better bridge.
 
