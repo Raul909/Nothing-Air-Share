@@ -4,6 +4,8 @@
 
 Built as a native, lightweight, and local-only alternative to AirDrop for users with a mixed Apple and Nothing ecosystem (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, etc.).
 
+📦 **[Download NothingAirShare.apk (v2.5.0)](apk/NothingAirShare.apk)**
+
 ---
 
 ## ⚡️ Features

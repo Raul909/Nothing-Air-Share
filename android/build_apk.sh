@@ -86,9 +86,13 @@ DEST_APK="$DEST_DIR/NothingAirShare.apk"
 if [ -f "$OUTPUT_APK" ]; then
     mkdir -p "$DEST_DIR"
     cp "$OUTPUT_APK" "$DEST_APK"
+    # Also copy to the project's apk/ directory
+    mkdir -p "$SCRIPT_DIR/../apk"
+    cp "$OUTPUT_APK" "$SCRIPT_DIR/../apk/NothingAirShare.apk"
     echo "============================================="
     echo " SUCCESS: APK built successfully!"
     echo " Saved to: $DEST_APK"
+    echo " Also copied to project folder: apk/NothingAirShare.apk"
     echo "============================================="
 else
     echo "Error: Gradle build finished but output APK not found at $OUTPUT_APK"
