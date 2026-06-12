@@ -266,8 +266,14 @@ def push_to_android_clipboard(item):
     try:
         if item["type"] == "text":
             escaped_text = item["data"].replace("'", "'\\''")
-            subprocess.run(["adb", "shell", f"cmd clipboard set-text '{escaped_text}'"], check=True, capture_output=True)
-            print(f"[Sync] Text pushed to Phone: {item['data'][:30]}...")
+            res = subprocess.run([
+                "adb", "shell",
+                f"am broadcast -n 'com.potatodigua.clipboardhelper/.ClipperReceiver' -a clipper.set -f 32 -e text '{escaped_text}'"
+            ], capture_output=True, text=True)
+            if res.returncode == 0:
+                print(f"[Sync] Text pushed to Phone: {item['data'][:30]}...")
+            else:
+                print(f"[Sync Warning] Failed to push clipboard: {res.stderr.strip() or res.stdout.strip()}")
         elif item["type"] == "image":
             remote_path = f"{DROP_ZONE_ANDROID}/clipboard_image.png"
             subprocess.run(["adb", "push", item["data"], remote_path], check=True, capture_output=True)
@@ -350,40 +356,44 @@ def android_event_monitor():
     # Watches Android clipboard and file drop directory via a single persistent stream
     global CURRENT_CLIPBOARD_CONTENT
     
-    shell_script = (
-        'last_clip=""; '
-        'last_files=""; '
-        'last_zen=""; '
-        'mkdir -p /sdcard/Download/NothingDrop/ToMac; '
-        'count=0; '
-        'while true; do '
-        '  curr_clip=$(cmd clipboard get-text 2>/dev/null); '
-        '  if [ "$curr_clip" != "$last_clip" ]; then '
-        '    encoded=$(echo -n "$curr_clip" | base64 | tr -d "\\r\\n"); '
-        '    echo "CLIPBOARD:$encoded"; '
-        '    last_clip="$curr_clip"; '
-        '  fi; '
-        '  curr_zen=$(settings get global zen_mode 2>/dev/null); '
-        '  if [ "$curr_zen" != "$last_zen" ]; then '
-        '    echo "FOCUS:$curr_zen"; '
-        '    last_zen="$curr_zen"; '
-        '  fi; '
-        '  count=$((count + 1)); '
-        '  if [ $count -ge 5 ]; then '
-        '    count=0; '
-        '    curr_files=$(ls /sdcard/Download/NothingDrop/ToMac 2>/dev/null); '
-        '    if [ "$curr_files" != "$last_files" ]; then '
-        '      for file in $curr_files; do '
-        '        if ! echo "$last_files" | grep -q "^$file$"; then '
-        '          echo "FILE:$file"; '
-        '        fi; '
-        '      done; '
-        '      last_files="$curr_files"; '
-        '    fi; '
-        '  fi; '
-        '  sleep 0.2; '
-        'done'
-    )
+    shell_script = """
+last_clip=""
+last_files=""
+last_zen=""
+mkdir -p /sdcard/Download/NothingDrop/ToMac
+count=0
+while true; do
+  curr_zen=$(settings get global zen_mode 2>/dev/null)
+  if [ "$curr_zen" != "$last_zen" ]; then
+    echo "FOCUS:$curr_zen"
+    last_zen="$curr_zen"
+  fi
+  count=$((count + 1))
+  if [ $((count % 10)) -eq 0 ]; then
+    curr_clip_raw=$(am broadcast -n "com.potatodigua.clipboardhelper/.ClipperReceiver" -a clipper.get -f 32 2>/dev/null | grep "data=")
+    data_only="${curr_clip_raw#*data=\\"}"
+    data_only="${data_only%\\"}"
+    if [ -n "$data_only" ] && [ "$data_only" != "$last_clip" ]; then
+      encoded=$(echo -n "$data_only" | base64 | tr -d "\\r\\n")
+      echo "CLIPBOARD:$encoded"
+      last_clip="$data_only"
+    fi
+  fi
+  if [ $count -ge 10 ]; then
+    count=0
+    curr_files=$(ls /sdcard/Download/NothingDrop/ToMac 2>/dev/null)
+    if [ "$curr_files" != "$last_files" ]; then
+      for file in $curr_files; do
+        if ! echo "$last_files" | grep -q "^$file$"; then
+          echo "FILE:$file"
+        fi
+      done
+      last_files="$curr_files"
+    fi
+  fi
+  sleep 0.2
+done
+"""
     
     while True:
         try:
@@ -408,11 +418,12 @@ def android_event_monitor():
             if app_delegate:
                 app_delegate.set_connected(True)
                 
-            # Spawn persistent shell script
+            # Spawn persistent shell script using base64 encoding to prevent quoting issues
+            encoded_script = base64.b64encode(shell_script.encode('utf-8')).decode('utf-8')
             proc = subprocess.Popen(
-                ["adb", "shell", shell_script],
+                ["adb", "shell", f"echo {encoded_script} | base64 -d | sh"],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
                 text=True,
                 bufsize=1
             )
@@ -426,6 +437,8 @@ def android_event_monitor():
                 # Handle Clipboard Sync
                 if line.startswith("CLIPBOARD:"):
                     encoded_val = line[len("CLIPBOARD:"):]
+                    if not encoded_val:
+                        continue
                     try:
                         decoded_val = base64.b64decode(encoded_val).decode('utf-8')
                         if decoded_val != CURRENT_CLIPBOARD_CONTENT:
@@ -439,7 +452,10 @@ def android_event_monitor():
                         
                 # Handle Focus/DND Sync
                 elif line.startswith("FOCUS:"):
-                    mode = line.split(":")[1]
+                    parts = line.split(":", 1)
+                    if len(parts) < 2:
+                        continue
+                    mode = parts[1]
                     is_dnd = mode != "0"
                     status_text = "Enabled" if is_dnd else "Disabled"
                     print(f"[Android] DND state: {status_text}")
@@ -448,10 +464,18 @@ def android_event_monitor():
                 # Handle File Sync (Android -> Mac)
                 elif line.startswith("FILE:"):
                     filename = line[len("FILE:"):]
+                    if not filename:
+                        continue
                     print(f"[Android] New file drop: {filename}")
                     threading.Thread(target=pull_file_from_android, args=(filename,)).start()
+                else:
+                    # Ignore all other output/warnings to keep daemon stable
+                    print(f"[ADB Stream Warning] Unexpected line: {line}")
             
             proc.wait()
+            print("[ADB Stream] Process exited")
+            if app_delegate:
+                app_delegate.set_connected(False)
         except Exception as e:
             print(f"[ADB Stream] Connection broke: {e}")
             if app_delegate:
@@ -559,6 +583,12 @@ class ApplicationBootstrap(NSObject):
         )
         menu.addItem_(connect_item)
 
+        if self.connected:
+            install_helper_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "Install Clipboard Helper APK...", "installHelper:", ""
+            )
+            menu.addItem_(install_helper_item)
+
         menu.addItem_(NSMenuItem.separatorItem())
 
         quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Quit Nothing Sync", "quitApp:", "")
@@ -578,6 +608,42 @@ class ApplicationBootstrap(NSObject):
 
     def connectADB_(self, sender):
         threading.Thread(target=self.show_connect_dialog).start()
+
+    def installHelper_(self, sender):
+        threading.Thread(target=self.run_install_helper).start()
+
+    def run_install_helper(self):
+        import urllib.request
+        apk_url = "https://github.com/Potato-DiGua/ClipboardHelper/releases/download/v0.0.1/ClipboardHelper-release-1.0.apk"
+        local_apk_path = os.path.expanduser("~/.nothing_sync/ClipboardHelper.apk")
+        
+        # 1. Notify downloading
+        send_mac_notification("Clipboard Helper", "Downloading APK from GitHub...")
+        print("[Helper Install] Downloading APK from GitHub...")
+        
+        try:
+            # Download file
+            urllib.request.urlretrieve(apk_url, local_apk_path)
+            print("[Helper Install] APK downloaded to " + local_apk_path)
+            
+            # 2. Install via ADB
+            send_mac_notification("Clipboard Helper", "Installing APK on Phone...")
+            print("[Helper Install] Installing APK on phone...")
+            res = subprocess.run(["adb", "install", "-r", local_apk_path], capture_output=True, text=True)
+            
+            if res.returncode == 0:
+                print("[Helper Install] Successfully installed APK on phone.")
+                send_mac_notification(
+                    "Clipboard Helper Success", 
+                    "Successfully installed! Please open 'ClipboardHelper' on your phone once to activate."
+                )
+            else:
+                error_msg = res.stderr.strip() or res.stdout.strip()
+                print("[Helper Install Error] ADB Install failed: " + error_msg)
+                send_mac_notification("Clipboard Helper Error", "Install failed: " + error_msg)
+        except Exception as e:
+            print("[Helper Install Error] Exception: " + str(e))
+            send_mac_notification("Clipboard Helper Error", "Failed to download/install: " + str(e))
 
     def show_connect_dialog(self):
         self.performSelectorOnMainThread_withObject_waitUntilDone_(

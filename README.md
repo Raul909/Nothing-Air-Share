@@ -143,6 +143,11 @@ To allow your Mac to sync with your phone securely over Wi-Fi, you need to enabl
    * Select **Connect Wireless ADB...**.
    * Enter your phone's IP address and Port (e.g., `192.168.1.100:5555`) and click **Connect**.
    * The menu bar icon will turn into a **white circle** (`⚪️`) and display your phone's battery level (e.g., `⚪️ 78%` or `⚪️ 78% ⚡️` if charging).
+3. **Activate Clipboard Sync (Android 13+ / Nothing OS 2.0+)**:
+   * Modern Android versions restrict clipboard access for standard ADB commands.
+   * To enable clipboard sync, click the **`⚪️`** icon in your Mac's menu bar (while connected) and select **Install Clipboard Helper APK...**.
+   * The app will automatically download and install the helper APK onto your phone wirelessly.
+   * Open the newly installed **ClipboardHelper** app on your phone once to activate it. If prompted, grant the *"Display over other apps"* permission.
 
 ---
 
