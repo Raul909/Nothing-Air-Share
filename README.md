@@ -11,19 +11,30 @@ I built this project because I wanted the best of both worlds. I wanted my Nothi
 ## 💠 The Philosophy
 No bloat. No accounts. No cloud servers. Just your devices talking to each other over your local Wi-Fi, wrapped in that signature Nothing dot-matrix aesthetic.
 
-## 🚀 Features
+### 🚀 Features
 
 ### 1. Nothing AirShare (iOS App)
 A native iOS application built in SwiftUI that mimics the Nothing OS dashboard.
-*   **Discovery**: Find your Nothing Phone on the local network instantly.
+*   **Low-Latency Discovery**: Re-engineered with stable device identifiers and incremental list updates to eliminate UI flickering and connection lag.
+*   **Pro File Streaming**: Optimized `TransferManager` uses disk-streaming (zero-RAM loading) to send files of any size without latency or memory pressure.
 *   **Share Extension**: Send photos and files directly from the iOS Photos/Files app Share Sheet.
-*   **Nothing UI**: Custom dot-matrix typography, monochrome widgets, and haptic feedback.
+*   **Haptic Proximity**: Taptic Engine pulses when a device is nearby, creating a physical "AirDrop" feel.
 
 ### 2. Unified Clipboard & Drop (macOS)
 A background Python daemon that handles the "invisible" heavy lifting.
-*   **Universal Clipboard**: Copy text on Mac, paste on Nothing Phone. Copy on Phone, paste on Mac. It just works.
-*   **Nothing Drop**: A folder on your Mac (`~/NothingDrop`). Anything you put in it is instantly pushed to your phone's Downloads.
-*   **Bypass**: Uses ADB-over-Wi-Fi to circumvent Android's background clipboard restrictions safely.
+*   **Event-Driven Sync**: Optimized for macOS with `changeCount` monitoring—instantly detects clipboard changes with near-zero CPU overhead.
+*   **Multimedia Support**: Now supports **Images**! Copy an image on Mac, and it’s instantly pushed to your Nothing Phone.
+*   **Nothing Drop**: A high-performance folder watcher (`watchdog`) on your Mac. Drag any file into `~/NothingDrop`, and it’s pushed to your phone via ADB in real-time.
+*   **Zero-Lag Protocol**: Multi-threaded ADB operations ensure that one transfer doesn't block the next.
+
+---
+
+## ⚡️ Pro-Level Optimizations
+Unlike basic sync tools, this project is built for performance:
+*   **Memory Efficiency**: Files are streamed directly from disk to network, never loaded entirely into memory.
+*   **Async Core**: The Python daemon uses non-blocking threads for ADB calls to ensure the clipboard sync never "hangs."
+*   **Stable Discovery**: Bonjour services are identified by unique service names, ensuring your "Nearby" list is rock-solid.
+
 
 ---
 

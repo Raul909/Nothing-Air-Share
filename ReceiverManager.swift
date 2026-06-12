@@ -8,6 +8,9 @@ class ReceiverManager: ObservableObject {
     @Published var incomingTransfer: String?
     @Published var progress: Double = 0.0
     
+    private var currentFileHandle: FileHandle?
+    private var tempFileURL: URL?
+    
     init() {
         startListening()
     }
@@ -33,22 +36,65 @@ class ReceiverManager: ObservableObject {
     private func handleConnection(_ connection: NWConnection) {
         connection.start(queue: .main)
         
-        // Simplified HTTP Parsing for this prototype
+        // Prepare temporary file for streaming
+        let tempDir = FileManager.default.temporaryDirectory
+        let fileName = "incoming_\(UUID().uuidString).bin"
+        tempFileURL = tempDir.appendingPathComponent(fileName)
+        
+        FileManager.default.createFile(atPath: tempFileURL!.path, contents: nil, attributes: nil)
+        
+        do {
+            currentFileHandle = try FileHandle(forWritingTo: tempFileURL!)
+        } catch {
+            print("Receiver Manager: Failed to create file handle: \(error)")
+            connection.cancel()
+            return
+        }
+        
+        DispatchQueue.main.async {
+            self.incomingTransfer = "RECEIVING..."
+            self.progress = 0.0
+        }
+        
+        receiveData(on: connection)
+    }
+    
+    private func receiveData(on connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, context, isComplete, error in
-            if let data = data, let request = String(data: data, encoding: .utf8) {
-                if request.contains("POST") {
-                    // Extract metadata (simplified)
-                    DispatchQueue.main.async {
-                        self?.incomingTransfer = "INCOMING FILE"
-                        // In a real app, we'd parse the multipart body here
-                        print("Receiver Manager: Received POST request")
-                    }
-                }
+            guard let self = self else { return }
+            
+            if let data = data, !data.isEmpty {
+                try? self.currentFileHandle?.seekToEnd()
+                self.currentFileHandle?.write(data)
+                
+                // Note: Without a protocol header, we don't know the total size here.
+                // In a production app, we'd parse the HTTP Content-Length.
             }
             
-            // For a real app, we would keep the connection open to stream the file
-            // connection.send(...)
-            connection.cancel()
+            if isComplete {
+                self.finalizeTransfer()
+                connection.cancel()
+            } else if let error = error {
+                print("Receiver Manager: Receive error: \(error)")
+                connection.cancel()
+            } else {
+                self.receiveData(on: connection)
+            }
+        }
+    }
+    
+    private func finalizeTransfer() {
+        try? currentFileHandle?.close()
+        currentFileHandle = nil
+        
+        print("Receiver Manager: Transfer complete. Saved to \(tempFileURL?.path ?? "unknown")")
+        
+        DispatchQueue.main.async {
+            self.incomingTransfer = "FINISHED"
+            self.progress = 1.0
+            
+            // Logic to move the file to a permanent location (e.g. Downloads or Photos)
+            // can be added here based on detected file type.
         }
     }
 }

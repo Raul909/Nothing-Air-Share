@@ -2,17 +2,27 @@ import Foundation
 import Network
 
 struct DiscoveredDevice: Identifiable, Hashable {
-    let id: UUID = UUID()
     let name: String
     let endpoint: NWEndpoint
     var lastSeen: Date = Date()
+    
+    // Stable ID based on service name
+    var id: String { name }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+    }
+    
+    static func == (lhs: DiscoveredDevice, rhs: DiscoveredDevice) -> Bool {
+        lhs.name == rhs.name
+    }
     
     // Extract IP/Port if possible for UI
     var connectionString: String {
         if case let .hostPort(host, port) = endpoint {
             return "\(host):\(port)"
         }
-        return "Resolving..."
+        return "READY"
     }
 }
 
@@ -48,17 +58,40 @@ class DiscoveryManager: ObservableObject {
         browser?.browseResultsChangedHandler = { [weak self] results, changes in
             guard let self = self else { return }
             
-            var newDevices: [DiscoveredDevice] = []
-            for result in results {
-                if case let .bonjourService(name, type, domain, txtRecord) = result.endpoint {
-                    // In a real app, we'd parse the TXT record for device details
-                    let device = DiscoveredDevice(name: name, endpoint: result.endpoint)
-                    newDevices.append(device)
-                }
-            }
-            
             DispatchQueue.main.async {
-                self.discoveredDevices = newDevices
+                // Efficiently update the list without full rebuild
+                var currentDevices = self.discoveredDevices
+                
+                for change in changes {
+                    switch change {
+                    case .added(let result):
+                        if case let .bonjourService(name, _, _, _) = result.endpoint {
+                            let newDevice = DiscoveredDevice(name: name, endpoint: result.endpoint)
+                            if !currentDevices.contains(newDevice) {
+                                currentDevices.append(newDevice)
+                                print("Discovery Manager: Added \(name)")
+                            }
+                        }
+                    case .removed(let result):
+                        if case let .bonjourService(name, _, _, _) = result.endpoint {
+                            currentDevices.removeAll { $0.name == name }
+                            print("Discovery Manager: Removed \(name)")
+                        }
+                    default:
+                        break
+                    }
+                }
+                
+                // Final sync with all results to ensure consistency
+                let allActiveNames = results.compactMap { result -> String? in
+                    if case let .bonjourService(name, _, _, _) = result.endpoint { return name }
+                    return nil
+                }
+                currentDevices = currentDevices.filter { allActiveNames.contains($0.name) }
+                
+                if self.discoveredDevices != currentDevices {
+                    self.discoveredDevices = currentDevices
+                }
             }
         }
         

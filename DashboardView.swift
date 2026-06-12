@@ -49,6 +49,15 @@ struct DashboardView: View {
                             transferManager.state = .idle
                         }
                     }
+            } else if case .failed(let message) = transferManager.state {
+                transferOverlay(progress: 0, label: "FAILED")
+                    .onAppear {
+                        successHaptic.notificationOccurred(.error)
+                        print("Transfer failed: \(message)")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                            transferManager.state = .idle
+                        }
+                    }
             }
         }
         .onChange(of: discoveryManager.discoveredDevices) { devices in
