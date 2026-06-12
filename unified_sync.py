@@ -595,7 +595,8 @@ while true; do
   count=$((count + 1))
   if [ $((count % 10)) -eq 0 ]; then
     curr_clip_raw=$(am broadcast -n "TEMPLATE_HELPER_RECEIVER" -a clipper.get -f 32 2>/dev/null | grep "data=")
-    data_only="${curr_clip_raw#*data=\\"}"
+    temp="${curr_clip_raw#*data=\\"}"
+    data_only="${temp%%\\", extras:*}"
     data_only="${data_only%\\"}"
     if [ -n "$data_only" ] && [ "$data_only" != "$last_clip" ]; then
       encoded=$(echo -n "$data_only" | base64 | tr -d "\\r\\n")

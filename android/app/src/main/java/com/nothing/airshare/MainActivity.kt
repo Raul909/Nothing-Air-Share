@@ -28,6 +28,10 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
     private lateinit var nsdHelper: NsdHelper
     private val discoveredDevices = mutableMapOf<String, Pair<InetAddress, Int>>()
     private var selectedDeviceTarget: Pair<InetAddress, Int>? = null
+    private lateinit var clipboard: ClipboardManager
+    private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
+        updateClipboardUI()
+    }
 
     // Register a file picker launcher
     private val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -48,6 +52,11 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         setContentView(binding.root)
 
         supportActionBar?.hide()
+
+        // Initialize clipboard manager and listener
+        clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.addPrimaryClipChangedListener(clipboardListener)
+        updateClipboardUI()
 
         // 1. Initialize NSD Bonjour Discovery & Advertising
         nsdHelper = NsdHelper(this, this)
@@ -209,10 +218,21 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         return String.format("%.2f %s", size / Math.pow(1024.toDouble(), digitGroups.toDouble()), units[digitGroups])
     }
 
+    private fun updateClipboardUI() {
+        val clip = clipboard.primaryClip
+        if (clip != null && clip.itemCount > 0) {
+            val text = clip.getItemAt(0).text?.toString() ?: ""
+            binding.tvStatus.text = "Clipboard: $text"
+        } else {
+            binding.tvStatus.text = "Clipboard Empty"
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         nsdHelper.stop()
         FileTransferService.stopServer()
+        clipboard.removePrimaryClipChangedListener(clipboardListener)
     }
 }
 

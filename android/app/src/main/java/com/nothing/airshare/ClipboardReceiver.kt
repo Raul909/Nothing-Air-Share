@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 
 class ClipboardReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -19,6 +20,7 @@ class ClipboardReceiver : BroadcastReceiver() {
             if (text != null) {
                 val clip = ClipData.newPlainText("Nothing AirShare", text)
                 clipboard.setPrimaryClip(clip)
+                Toast.makeText(context, "Clipboard synced from Mac: $text", Toast.LENGTH_SHORT).show()
                 setResult(0, "Text is copied into clipboard.", null)
                 Log.d("ClipboardReceiver", "Clipboard set: $text")
             } else {
