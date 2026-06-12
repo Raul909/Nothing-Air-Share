@@ -32,6 +32,11 @@ A state-of-the-art Python daemon powered by PyObjC that turns your macOS menu ba
 *   **Focus Sync**: Automatically synchronizes macOS Do Not Disturb with Android's `zen_mode` in real-time.
 *   **Glyph Notifications**: Triggers the Nothing Phone's native Essential Glyph light when files or clipboards are received from the Mac using high-priority `cmd notification post` commands.
 
+### 3. Nothing AirShare (Android App)
+A native Android companion app built in Kotlin with a high-fidelity Nothing OS styled dashboard.
+*   **ADB Broadcast Clipboard Receiver**: Operates clipboard get/set commands via secure ADB intents under the `com.nothing.airshare` package, bypassing background clipboard restrictions in Android 10+.
+*   **Clean Nothing UI**: Displays sync connection status, battery details, and includes a testing interface for manual copy/paste sync operations.
+
 ---
 
 ## 🏗 Architecture Overview
@@ -145,9 +150,14 @@ To allow your Mac to sync with your phone securely over Wi-Fi, you need to enabl
    * The menu bar icon will turn into a **white circle** (`⚪️`) and display your phone's battery level (e.g., `⚪️ 78%` or `⚪️ 78% ⚡️` if charging).
 3. **Activate Clipboard Sync (Android 13+ / Nothing OS 2.0+)**:
    * Modern Android versions restrict clipboard access for standard ADB commands.
-   * To enable clipboard sync, click the **`⚪️`** icon in your Mac's menu bar (while connected) and select **Install Clipboard Helper APK...**.
-   * The app will automatically download and install the helper APK onto your phone wirelessly.
-   * Open the newly installed **ClipboardHelper** app on your phone once to activate it. If prompted, grant the *"Display over other apps"* permission.
+   * To enable clipboard sync, first build your custom Nothing AirShare Android app APK by running this command in your Mac terminal:
+     ```bash
+     bash android/build_apk.sh
+     ```
+     *(This script will automatically configure OpenJDK 17, Gradle, the Android SDK command-line tools, and build the APK.)*
+   * Once built, click the **`⚪️`** icon in your Mac's menu bar (while connected) and select **Install Nothing AirShare APK...**.
+   * The app will automatically be installed onto your phone wirelessly over ADB.
+   * Open the newly installed **Nothing AirShare** app on your phone once to activate it. If prompted, grant the *"Display over other apps"* permission.
 
 ---
 

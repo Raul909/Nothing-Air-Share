@@ -1,2 +1,18 @@
 # Added by code-review-graph
 .code-review-graph/
+
+# Python Virtual Environment & cache
+.venv/
+__pycache__/
+*.pyc
+
+# Android build outputs and caches
+.gradle/
+build/
+**/build/
+local.properties
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk

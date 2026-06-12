@@ -39,6 +39,10 @@ LAST_CHANGE_COUNT = -1
 app_delegate = None
 db = None
 
+# Helper app configuration for Option B clipboard sync
+HELPER_PACKAGE = "com.nothing.airshare"
+HELPER_RECEIVER = "com.nothing.airshare/.ClipboardReceiver"
+
 # Config helpers
 def save_config(config):
     try:
@@ -261,6 +265,26 @@ def set_mac_clipboard(type, data):
         if image:
             pb.writeObjects_([image])
 
+def detect_helper_package():
+    global HELPER_PACKAGE, HELPER_RECEIVER
+    try:
+        res = subprocess.run(["adb", "shell", "pm list packages"], capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            if "com.nothing.airshare" in res.stdout:
+                HELPER_PACKAGE = "com.nothing.airshare"
+                HELPER_RECEIVER = "com.nothing.airshare/.ClipboardReceiver"
+                print("[ADB] Custom Nothing AirShare Android app detected for clipboard sync!")
+            elif "com.potatodigua.clipboardhelper" in res.stdout:
+                HELPER_PACKAGE = "com.potatodigua.clipboardhelper"
+                HELPER_RECEIVER = "com.potatodigua.clipboardhelper/.ClipperReceiver"
+                print("[ADB] Third-party ClipboardHelper detected for clipboard sync!")
+            else:
+                HELPER_PACKAGE = "com.nothing.airshare"
+                HELPER_RECEIVER = "com.nothing.airshare/.ClipboardReceiver"
+                print("[ADB Warning] No clipboard helper app detected on phone. Sync will be disabled.")
+    except Exception as e:
+        print(f"[ADB Warning] Failed to detect helper app: {e}")
+
 # Push to Android Clipboard
 def push_to_android_clipboard(item):
     try:
@@ -268,7 +292,7 @@ def push_to_android_clipboard(item):
             escaped_text = item["data"].replace("'", "'\\''")
             res = subprocess.run([
                 "adb", "shell",
-                f"am broadcast -n 'com.potatodigua.clipboardhelper/.ClipperReceiver' -a clipper.set -f 32 -e text '{escaped_text}'"
+                f"am broadcast -n '{HELPER_RECEIVER}' -a clipper.set -f 32 -e text '{escaped_text}'"
             ], capture_output=True, text=True)
             if res.returncode == 0:
                 print(f"[Sync] Text pushed to Phone: {item['data'][:30]}...")
@@ -370,7 +394,7 @@ while true; do
   fi
   count=$((count + 1))
   if [ $((count % 10)) -eq 0 ]; then
-    curr_clip_raw=$(am broadcast -n "com.potatodigua.clipboardhelper/.ClipperReceiver" -a clipper.get -f 32 2>/dev/null | grep "data=")
+    curr_clip_raw=$(am broadcast -n "TEMPLATE_HELPER_RECEIVER" -a clipper.get -f 32 2>/dev/null | grep "data=")
     data_only="${curr_clip_raw#*data=\\"}"
     data_only="${data_only%\\"}"
     if [ -n "$data_only" ] && [ "$data_only" != "$last_clip" ]; then
@@ -418,8 +442,12 @@ done
             if app_delegate:
                 app_delegate.set_connected(True)
                 
+            # Dynamically detect installed helper package
+            detect_helper_package()
+            
             # Spawn persistent shell script using base64 encoding to prevent quoting issues
-            encoded_script = base64.b64encode(shell_script.encode('utf-8')).decode('utf-8')
+            runnable_script = shell_script.replace("TEMPLATE_HELPER_RECEIVER", HELPER_RECEIVER)
+            encoded_script = base64.b64encode(runnable_script.encode('utf-8')).decode('utf-8')
             proc = subprocess.Popen(
                 ["adb", "shell", f"echo {encoded_script} | base64 -d | sh"],
                 stdout=subprocess.PIPE,
@@ -585,7 +613,7 @@ class ApplicationBootstrap(NSObject):
 
         if self.connected:
             install_helper_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                "Install Clipboard Helper APK...", "installHelper:", ""
+                "Install Nothing AirShare APK...", "installHelper:", ""
             )
             menu.addItem_(install_helper_item)
 
@@ -613,37 +641,40 @@ class ApplicationBootstrap(NSObject):
         threading.Thread(target=self.run_install_helper).start()
 
     def run_install_helper(self):
-        import urllib.request
-        apk_url = "https://github.com/Potato-DiGua/ClipboardHelper/releases/download/v0.0.1/ClipboardHelper-release-1.0.apk"
-        local_apk_path = os.path.expanduser("~/.nothing_sync/ClipboardHelper.apk")
+        local_apk_path = os.path.expanduser("~/.nothing_sync/NothingAirShare.apk")
         
-        # 1. Notify downloading
-        send_mac_notification("Clipboard Helper", "Downloading APK from GitHub...")
-        print("[Helper Install] Downloading APK from GitHub...")
-        
-        try:
-            # Download file
-            urllib.request.urlretrieve(apk_url, local_apk_path)
-            print("[Helper Install] APK downloaded to " + local_apk_path)
+        # 1. Check if APK exists locally
+        if not os.path.exists(local_apk_path):
+            print("[Helper Install Error] Custom NothingAirShare.apk not found at " + local_apk_path)
+            send_mac_notification(
+                "Build Required", 
+                "NothingAirShare.apk not found. Please run build_apk.sh first."
+            )
+            return
             
+        try:
             # 2. Install via ADB
-            send_mac_notification("Clipboard Helper", "Installing APK on Phone...")
-            print("[Helper Install] Installing APK on phone...")
+            send_mac_notification("Nothing AirShare", "Installing APK on Phone...")
+            print("[Helper Install] Installing custom APK on phone: " + local_apk_path)
+            
+            # Accept ADB installs bypass settings first to ensure smooth installation
+            subprocess.run(["adb", "shell", "settings put global verifier_verify_adb_installs 0"], capture_output=True)
+            
             res = subprocess.run(["adb", "install", "-r", local_apk_path], capture_output=True, text=True)
             
             if res.returncode == 0:
-                print("[Helper Install] Successfully installed APK on phone.")
+                print("[Helper Install] Successfully installed custom APK on phone.")
                 send_mac_notification(
-                    "Clipboard Helper Success", 
-                    "Successfully installed! Please open 'ClipboardHelper' on your phone once to activate."
+                    "Nothing AirShare Success", 
+                    "Successfully installed! Please open 'Nothing AirShare' on your phone once to activate."
                 )
             else:
                 error_msg = res.stderr.strip() or res.stdout.strip()
                 print("[Helper Install Error] ADB Install failed: " + error_msg)
-                send_mac_notification("Clipboard Helper Error", "Install failed: " + error_msg)
+                send_mac_notification("Nothing AirShare Error", "Install failed: " + error_msg)
         except Exception as e:
             print("[Helper Install Error] Exception: " + str(e))
-            send_mac_notification("Clipboard Helper Error", "Failed to download/install: " + str(e))
+            send_mac_notification("Nothing AirShare Error", "Failed to install: " + str(e))
 
     def show_connect_dialog(self):
         self.performSelectorOnMainThread_withObject_waitUntilDone_(
