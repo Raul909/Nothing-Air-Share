@@ -19,7 +19,7 @@ Built as a native, lightweight, and local-only alternative to AirDrop for users 
 
 ---
 
-## 🚀 Quick Setup
+## 🚀 Quick Setup (macOS & Android)
 
 ### 1. Prepare Your Nothing Phone
 1. Connect your phone and Mac to the **same Wi-Fi network**.
@@ -42,7 +42,7 @@ pip install pyobjc-framework-Cocoa watchdog Pillow
 python3 unified_sync.py
 ```
 
-### 3. Connect the Phone
+### 3. Connect & Pair
 1. A **Nothing Dot (`⚫️`)** will appear in your Mac's menu bar.
 2. Pair your phone in Terminal using the pairing IP:Port from your phone's screen:
    ```bash
@@ -50,14 +50,50 @@ python3 unified_sync.py
    # Enter the 6-digit pairing code when prompted
    ```
 3. Click the `⚫️` menu bar icon, select **Connect Wireless ADB...**, and enter your phone's active IP address and port (e.g. `192.168.1.100:5555`).
-4. Once connected (`⚪️`), select **Install Nothing AirShare APK...** from the menu bar to install the companion Android app automatically. Open the app on your phone once to activate background sync.
+4. Once connected (`⚪️`), the menu bar icon will show your phone's battery percentage and charging state.
 
 ---
 
-## 📱 iOS App Setup
+## 📲 APK Installation Guide
+
+To enable full bidirectional clipboard sync (bypassing background restrictions on Android 10+), install the companion Android app:
+
+* **Option A: Automated Install (Easiest)**:
+  Once the Mac status bar menu shows a connected status (`⚪️`), click the menu icon and choose **"Install Nothing AirShare APK..."**. It will automatically push and install the APK wirelessly via ADB.
+* **Option B: Manual Sideload**:
+  1. Download [NothingAirShare.apk](apk/NothingAirShare.apk) directly from this repository to your Nothing Phone.
+  2. Open the downloaded `.apk` file using any file manager on your phone.
+  3. If prompted, enable **"Install from Unknown Sources"** for the file manager, then tap **Install**.
+  4. Open the installed **Nothing AirShare** app on your phone once to activate permissions.
+
+Once the APK is installed and the Mac is connected, the app will show **"Connected"** on its screen, indicating the sync bridge is fully operational.
+
+---
+
+## 🔄 The USP: Seamless Android, macOS & iOS Integration
+
+No intermediate websites, cloud servers, or messaging apps. The bridge is completely local, private, and automatic.
+
+### 📋 Bidirectional Clipboard Sync
+- **Mac ➔ Android**: Press `Cmd + C` to copy text, links, or images on Mac. Long-press and tap **Paste** on your Nothing Phone to paste immediately.
+- **Android ➔ Mac**: Copy any text or link on your Nothing Phone. Press `Cmd + V` on your Mac to paste it instantly.
+- **Clipboard History**: Click the `⚪️` menu bar icon on your Mac and hover over **Clipboard History** to see and select from your last 50 clipboard items.
+
+### 📁 Smart File Drop (NothingDrop)
+- **Mac ➔ Android**: Drag and drop any file into the `~/NothingDrop` folder on your Mac. It is instantly pushed to your phone's `Download/NothingDrop/` directory, and your phone will flash its Essential Glyph light.
+- **Android ➔ Mac**: Save or copy any file on your phone into the `/sdcard/Download/NothingDrop/ToMac/` directory. Your Mac will instantly pull the file, delete the phone's temporary copy to save storage, and route it:
+  - **Images & Screenshots** go to `~/Pictures/NothingDrop/`.
+  - **Documents** (`.pdf`, `.docx`, `.txt`) go to `~/Documents/NothingDrop/`.
+  - **All other files** go to `~/NothingDrop/`.
+  - Pushed files are indexed in real-time for instant searching via Spotlight (`Cmd + Space`).
+
+### 📱 iOS ➔ Mac & Android Sharing
 1. Open the `NothingApp` folder in **Xcode** on your macOS.
-2. Download and add the **NDOT-45** font (`NDOT-45.ttf`) to the project.
-3. Build and run on your iOS device. Grant **Local Network** permissions when prompted.
+2. Add the **NDOT-45** font (`NDOT-45.ttf`) to the project, build, and run on your iOS device.
+3. Ensure both devices are on the same Wi-Fi network. The iOS app will discover nearby Mac or Nothing Phone peers automatically. Select any file and stream it at maximum speed.
+
+### 🌙 Focus Mode Sync
+- Toggle **Do Not Disturb** on your Mac. Your Nothing Phone will automatically turn on Do Not Disturb / Zen Mode. Turning it off on Mac restores the phone to normal.
 
 ---
 
