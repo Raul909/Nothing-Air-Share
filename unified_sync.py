@@ -490,6 +490,14 @@ def push_to_android_clipboard(item):
     try:
         if item["type"] == "text":
             escaped_text = item["data"].replace("'", "'\\''")
+            
+            # 1. Update system clipboard directly using privileged adb shell cmd clipboard (always works)
+            subprocess.run([
+                "adb", "shell",
+                f"cmd clipboard set-text '{escaped_text}'"
+            ], capture_output=True)
+            
+            # 2. Also send broadcast to helper app so it can show Toast and update UI
             res = subprocess.run([
                 "adb", "shell",
                 f"am broadcast -n '{HELPER_RECEIVER}' -a clipper.set -f 32 -e text '{escaped_text}'"
@@ -594,10 +602,13 @@ while true; do
   fi
   count=$((count + 1))
   if [ $((count % 10)) -eq 0 ]; then
-    curr_clip_raw=$(am broadcast -n "TEMPLATE_HELPER_RECEIVER" -a clipper.get -f 32 2>/dev/null | grep "data=")
-    temp="${curr_clip_raw#*data=\\"}"
-    data_only="${temp%%\\", extras:*}"
-    data_only="${data_only%\\"}"
+    data_only=$(cmd clipboard get-text 2>/dev/null | sed -e 's/\r//g')
+    if [ -z "$data_only" ]; then
+      curr_clip_raw=$(am broadcast -n "TEMPLATE_HELPER_RECEIVER" -a clipper.get -f 32 2>/dev/null | grep "data=")
+      temp="${curr_clip_raw#*data=\\"}"
+      data_only="${temp%%\\", extras:*}"
+      data_only="${data_only%\\"}"
+    fi
     if [ -n "$data_only" ] && [ "$data_only" != "$last_clip" ]; then
       encoded=$(echo -n "$data_only" | base64 | tr -d "\\r\\n")
       echo "CLIPBOARD:$encoded"

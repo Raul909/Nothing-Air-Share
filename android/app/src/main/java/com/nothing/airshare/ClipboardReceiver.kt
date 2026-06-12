@@ -18,8 +18,12 @@ class ClipboardReceiver : BroadcastReceiver() {
         if ("clipper.set" == action) {
             val text = intent.getStringExtra("text")
             if (text != null) {
-                val clip = ClipData.newPlainText("Nothing AirShare", text)
-                clipboard.setPrimaryClip(clip)
+                try {
+                    val clip = ClipData.newPlainText("Nothing AirShare", text)
+                    clipboard.setPrimaryClip(clip)
+                } catch (e: SecurityException) {
+                    Log.e("ClipboardReceiver", "SecurityException setting clipboard: ${e.message}")
+                }
                 Toast.makeText(context, "Clipboard synced from Mac: $text", Toast.LENGTH_SHORT).show()
                 setResult(0, "Text is copied into clipboard.", null)
                 Log.d("ClipboardReceiver", "Clipboard set: $text")
