@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "code-review-graph": {
+      "command": "uvx",
+      "args": [
+        "code-review-graph",
+        "serve"
+      ],
+      "cwd": "/Users/raul/Documents/coding_projs/nothing-ios-app",
+      "type": "stdio",
+      "env": []
+    }
+  }
+}
