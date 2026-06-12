@@ -11,19 +11,25 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.view.Gravity
 import android.view.View
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.setPadding
 import com.nothing.airshare.databinding.ActivityMainBinding
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.net.InetAddress
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
     private lateinit var binding: ActivityMainBinding
+    private lateinit var nsdHelper: NsdHelper
+    private val discoveredDevices = mutableMapOf<String, Pair<InetAddress, Int>>()
+    private var selectedDeviceTarget: Pair<InetAddress, Int>? = null
     private lateinit var clipboard: ClipboardManager
     private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
         updateClipboardUI()
@@ -32,15 +38,21 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val checkFolderRunnable = object : Runnable {
         override fun run() {
-            updatePendingFilesUI()
+            updateDeviceListUI()
             handler.postDelayed(this, 1000)
         }
     }
 
-    // Register a file picker launcher
+    // Register a file picker launcher for direct P2P transfer
     private val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null) {
-            saveSharedFileToSyncFolder(uri)
+        if (uri != null && selectedDeviceTarget != null) {
+            try {
+                val tempFile = getFileFromUri(this, uri)
+                val target = selectedDeviceTarget!!
+                FileTransferService.sendFile(tempFile, target.first, target.second)
+            } catch (e: Exception) {
+                Toast.makeText(this, "Failed to prepare file: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -59,20 +71,45 @@ class MainActivity : AppCompatActivity() {
         // Handle incoming share intents
         handleSendIntent(intent)
 
-        // Set up the device/files section header to show pending files
-        binding.tvDevicesHeader.text = "PENDING OUTGOING FILES"
+        // 1. Initialize NSD Bonjour Discovery & Advertising
+        nsdHelper = NsdHelper(this, this)
+        nsdHelper.registerService(53317)
+        nsdHelper.discoverServices()
 
-        // Replace the default "Scanning..." text to guide the user
-        binding.tvNoDevices.text = "No files pending. Share files from any app via the Android Share sheet, or copy text to sync clipboards."
+        // 2. Initialize TCP Server
+        FileTransferService.startServer()
 
-        // Add picker trigger to the container or title for manual file selection
-        binding.llDevicesContainer.setOnClickListener {
-            filePickerLauncher.launch("*/*")
+        // 3. Bind File Transfer Callbacks to UI
+        FileTransferService.progressHandler = { progress ->
+            runOnUiThread {
+                binding.progressBarTransfer.visibility = View.VISIBLE
+                binding.progressBarTransfer.progress = (progress * 100).toInt()
+                if (progress >= 1.0) {
+                    binding.progressBarTransfer.visibility = View.GONE
+                }
+            }
         }
 
-        // Add a click handler for the widget status to trigger file picker
-        binding.widgetStatus.setOnClickListener {
-            filePickerLauncher.launch("*/*")
+        FileTransferService.statusHandler = { msg ->
+            runOnUiThread {
+                binding.tvStatus.text = msg
+            }
+        }
+
+        FileTransferService.incomingTransferHandler = { sender, fileName, fileSize, callback ->
+            runOnUiThread {
+                AlertDialog.Builder(this)
+                    .setTitle("Incoming File Share")
+                    .setMessage("Accept file '$fileName' (${formatFileSize(fileSize)}) from $sender?")
+                    .setPositiveButton("Accept") { _, _ ->
+                        callback(true)
+                    }
+                    .setNegativeButton("Decline") { _, _ ->
+                        callback(false)
+                    }
+                    .setCancelable(false)
+                    .show()
+            }
         }
 
         // Bind Clipboard operations
@@ -96,7 +133,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Start polling the outgoing folder
+        // Start polling the outgoing folder and updating UI
         handler.post(checkFolderRunnable)
     }
 
@@ -152,29 +189,83 @@ class MainActivity : AppCompatActivity() {
             }
             parcelFileDescriptor.close()
             Toast.makeText(this, "Added to Sync queue: $fileName", Toast.LENGTH_SHORT).show()
-            updatePendingFilesUI()
         } catch (e: Exception) {
             Toast.makeText(this, "Failed to queue file: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
-    private fun updatePendingFilesUI() {
-        val targetDir = File(getExternalFilesDir(null), "ToMac")
-        val files = targetDir.listFiles()?.filter { it.isFile } ?: emptyList()
+    // NSD Discovery Callbacks
+    override fun onDeviceDiscovered(name: String, host: InetAddress, port: Int) {
+        runOnUiThread {
+            discoveredDevices[name] = Pair(host, port)
+            updateDeviceListUI()
+        }
+    }
 
+    override fun onDeviceRemoved(name: String) {
+        runOnUiThread {
+            discoveredDevices.remove(name)
+            updateDeviceListUI()
+        }
+    }
+
+    private fun updateDeviceListUI() {
         binding.llDevicesContainer.removeAllViews()
 
-        if (files.isEmpty()) {
+        val targetDir = File(getExternalFilesDir(null), "ToMac")
+        val pendingFiles = targetDir.listFiles()?.filter { it.isFile } ?: emptyList()
+
+        if (discoveredDevices.isEmpty() && pendingFiles.isEmpty()) {
             binding.llDevicesContainer.addView(binding.tvNoDevices)
             binding.tvStatusLabel.text = "AIRDROP SHARING ACTIVE"
-            binding.tvStatus.text = "Tap here to send a file to Mac"
             return
         }
 
-        binding.tvStatusLabel.text = "SYNCING FILES..."
-        binding.tvStatus.text = "Waiting for Mac to pull ${files.size} file(s)"
+        if (pendingFiles.isNotEmpty()) {
+            binding.tvStatusLabel.text = "SYNCING FILES..."
+        } else {
+            binding.tvStatusLabel.text = "AIRDROP SHARING ACTIVE"
+        }
 
-        for (file in files) {
+        // 1. List resolved local Wi-Fi devices
+        for ((name, target) in discoveredDevices) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                setPadding(8)
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            val tvDeviceName = TextView(this).apply {
+                text = "📱 $name"
+                setTextColor(0xFFFFFFFF.toInt())
+                textSize = 14f
+                typeface = android.graphics.Typeface.MONOSPACE
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            val btnSend = Button(this).apply {
+                text = "SEND"
+                backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFFF0000.toInt())
+                setTextColor(0xFFFFFFFF.toInt())
+                typeface = android.graphics.Typeface.MONOSPACE
+                textSize = 12f
+                setOnClickListener {
+                    selectedDeviceTarget = target
+                    filePickerLauncher.launch("*/*")
+                }
+            }
+
+            row.addView(tvDeviceName)
+            row.addView(btnSend)
+            binding.llDevicesContainer.addView(row)
+        }
+
+        // 2. List pending ADB files
+        for (file in pendingFiles) {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
@@ -186,8 +277,8 @@ class MainActivity : AppCompatActivity() {
             }
 
             val tvFileName = TextView(this).apply {
-                text = "📤 ${file.name} (${formatFileSize(file.length())})"
-                setTextColor(0xFFFFFFFF.toInt())
+                text = "📤 ${file.name} (${formatFileSize(file.length())}) [Pending ADB]"
+                setTextColor(0xFF888888.toInt())
                 textSize = 13f
                 typeface = android.graphics.Typeface.MONOSPACE
                 layoutParams = LinearLayout.LayoutParams(
@@ -199,6 +290,21 @@ class MainActivity : AppCompatActivity() {
             row.addView(tvFileName)
             binding.llDevicesContainer.addView(row)
         }
+    }
+
+    private fun getFileFromUri(context: Context, uri: Uri): File {
+        val parcelFileDescriptor = context.contentResolver.openFileDescriptor(uri, "r")
+        val fileDescriptor = parcelFileDescriptor?.fileDescriptor ?: throw Exception("Null file descriptor")
+        val inputStream = FileInputStream(fileDescriptor)
+        
+        val tempFile = File(context.cacheDir, getFileName(context, uri))
+        val outputStream = FileOutputStream(tempFile)
+        inputStream.copyTo(outputStream)
+        
+        inputStream.close()
+        outputStream.close()
+        parcelFileDescriptor.close()
+        return tempFile
     }
 
     private fun getFileName(context: Context, uri: Uri): String {
@@ -235,6 +341,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        nsdHelper.stop()
+        FileTransferService.stopServer()
         handler.removeCallbacks(checkFolderRunnable)
         clipboard.removePrimaryClipChangedListener(clipboardListener)
     }
