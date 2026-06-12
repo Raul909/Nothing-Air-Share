@@ -6,12 +6,16 @@ import threading
 import json
 import sqlite3
 import base64
+import socket
+import struct
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
-    NSVariableStatusItemLength, NSObject, NSWorkspace,
+    NSVariableStatusItemLength, NSWorkspace,
     NSPasteboard, NSStringPboardType, NSFilenamesPboardType,
     NSTIFFPboardType, NSImage, NSBitmapImageRep, NSPNGFileType
 )
+from Foundation import NSObject, NSNetService, NSNetServiceBrowser
+import objc
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -38,6 +42,7 @@ CURRENT_CLIPBOARD_CONTENT = ""
 LAST_CHANGE_COUNT = -1
 app_delegate = None
 db = None
+bonjour_manager = None
 
 # Helper app configuration for Option B clipboard sync
 HELPER_PACKAGE = "com.nothing.airshare"
@@ -59,6 +64,201 @@ def load_config():
         except Exception as e:
             print(f"[Config] Error loading config: {e}")
     return {}
+
+# Bonjour Manager and P2P File Sharing Support
+class BonjourManager(NSObject):
+    def init(self):
+        self = objc.super(BonjourManager, self).init()
+        if self:
+            self.discovered_devices = {}  # name -> (host, port)
+            self.browser = None
+            self.service = None
+        return self
+
+    def start(self):
+        # 1. Advertise macOS Share service
+        self.service = NSNetService.alloc().initWithDomain_type_name_port_(
+            "local.",
+            "_nothing-share._tcp.",
+            "Mac Nothing Share",
+            53317
+        )
+        self.service.setDelegate_(self)
+        self.service.publish()
+
+        # 2. Browse for other devices
+        self.browser = NSNetServiceBrowser.alloc().init()
+        self.browser.setDelegate_(self)
+        self.browser.searchForServicesOfType_inDomain_("_nothing-share._tcp.", "local.")
+        print("[Bonjour] Started advertising as 'Mac Nothing Share' and browsing for services...")
+
+    # NSNetServiceBrowser delegate methods
+    def netServiceBrowser_didFindService_moreComing_(self, browser, service, more):
+        print(f"[Bonjour] Found service: {service.name()}")
+        service.setDelegate_(self)
+        service.resolveWithTimeout_(5.0)
+
+    def netServiceBrowser_didRemoveService_moreComing_(self, browser, service, more):
+        name = service.name()
+        print(f"[Bonjour] Removed service: {name}")
+        if name in self.discovered_devices:
+            del self.discovered_devices[name]
+            if app_delegate:
+                app_delegate.update_menu()
+
+    # NSNetService delegate methods
+    def netServiceDidResolveAddress_(self, service):
+        host = service.hostName()
+        port = service.port()
+        self.discovered_devices[service.name()] = (host, port)
+        print(f"[Bonjour] Resolved {service.name()} to {host}:{port}")
+        if app_delegate:
+            app_delegate.update_menu()
+
+    def netService_didNotPublish_(self, service, errorDict):
+        print(f"[Bonjour Error] Publishing failed: {errorDict}")
+
+    def netService_didNotResolve_(self, service, errorDict):
+        print(f"[Bonjour Error] Resolution failed: {errorDict}")
+
+
+def mac_tcp_server_loop():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(('0.0.0.0', 53317))
+        server.listen(5)
+        print("[TCP Server] Listening for peer transfers on port 53317")
+    except Exception as e:
+        print(f"[TCP Server] Bind failed: {e}")
+        return
+
+    while True:
+        try:
+            conn, addr = server.accept()
+            threading.Thread(target=handle_mac_incoming_file, args=(conn,)).start()
+        except Exception as e:
+            time.sleep(1)
+
+
+def handle_mac_incoming_file(conn):
+    try:
+        # 1. Read metadata length (4 bytes big-endian)
+        len_bytes = conn.recv(4)
+        if not len_bytes or len(len_bytes) < 4:
+            conn.close()
+            return
+        meta_len = struct.unpack('!I', len_bytes)[0]
+
+        # 2. Read metadata JSON
+        meta_bytes = conn.recv(meta_len)
+        meta_str = meta_bytes.decode('utf-8')
+        metadata = json.loads(meta_str)
+
+        sender = metadata.get("senderName", "Unknown Device")
+        filename = metadata.get("fileName", "file.bin")
+        filesize = metadata.get("fileSize", 0)
+
+        print(f"[P2P Receiver] Incoming file request from {sender}: {filename} ({filesize} bytes)")
+
+        # 3. Prompt user via AppleScript
+        size_mb = filesize / 1024.0 / 1024.0
+        prompt_script = f'''
+        tell application "System Events"
+            activate
+            display dialog "Incoming file share from {sender}\n\nFile: {filename}\nSize: {size_mb:.2f} MB\n\nDo you want to accept this file?" with title "Nothing AirShare" buttons {{"Decline", "Accept"}} default button "Accept"
+        end tell
+        '''
+        proc = subprocess.run(["osascript", "-e", prompt_script], capture_output=True, text=True)
+        accepted = "Accept" in proc.stdout
+
+        # 4. Respond with approval code
+        if accepted:
+            conn.send(bytes([0x01]))  # Accept
+            print("[P2P Receiver] User accepted the transfer. Receiving stream...")
+            send_mac_notification("Nothing AirShare", f"Receiving '{filename}' from {sender}...")
+
+            # 5. Receive stream
+            dest_dir = DROP_ZONE_MAC
+            dest_path = os.path.join(dest_dir, filename)
+
+            # Prevent file collisions
+            base, ext = os.path.splitext(filename)
+            counter = 1
+            while os.path.exists(dest_path):
+                dest_path = os.path.join(dest_dir, f"{base}_{counter}{ext}")
+                counter += 1
+
+            with open(dest_path, 'wb') as f:
+                received = 0
+                while received < filesize:
+                    chunk = conn.recv(min(65536, filesize - received))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    received += len(chunk)
+
+            print(f"[P2P Receiver] Successfully received: {dest_path}")
+            
+            # Import to macOS Spotlight index and notify
+            subprocess.run(["mdimport", dest_path], capture_output=True)
+            send_mac_notification("Nothing AirShare Success", f"Received '{os.path.basename(dest_path)}' from {sender}")
+        else:
+            conn.send(bytes([0x02]))  # Decline
+            print("[P2P Receiver] User declined the transfer.")
+            
+    except Exception as e:
+        print(f"[P2P Receiver Error] Connection failed: {e}")
+    finally:
+        conn.close()
+
+
+def mac_send_file_to_peer(file_path, device_name, host, port):
+    try:
+        send_mac_notification("Nothing AirShare", f"Connecting to {device_name}...")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((host, port))
+
+        # 1. Send metadata JSON
+        filename = os.path.basename(file_path)
+        filesize = os.path.getsize(file_path)
+        metadata = {
+            "senderName": "MacBook",
+            "fileName": filename,
+            "fileSize": filesize
+        }
+        meta_str = json.dumps(metadata)
+        meta_bytes = meta_str.encode('utf-8')
+
+        sock.sendall(struct.pack('!I', len(meta_bytes)))
+        sock.sendall(meta_bytes)
+
+        send_mac_notification("Nothing AirShare", f"Waiting for {device_name} to accept...")
+
+        # 2. Wait for response byte
+        res = sock.recv(1)
+        if res and res[0] == 0x01:
+            send_mac_notification("Nothing AirShare", f"Sending '{filename}' to {device_name}...")
+
+            # 3. Stream data
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    sock.sendall(chunk)
+
+            print(f"[P2P Sender] Sent {filename} to {device_name}")
+            send_mac_notification("Nothing AirShare Success", f"Sent '{filename}' to {device_name} successfully!")
+        else:
+            send_mac_notification("Nothing AirShare", f"{device_name} declined the transfer request.")
+
+    except Exception as e:
+        print(f"[P2P Sender Error] Transfer failed: {e}")
+        send_mac_notification("Nothing AirShare Error", f"Failed to send: {e}")
+    finally:
+        sock.close()
+
 
 # SQLite Clipboard History helper
 class ClipboardHistoryDB:
@@ -513,10 +713,17 @@ done
 # App startup logic
 class ApplicationBootstrap(NSObject):
     def applicationDidFinishLaunching_(self, notification):
-        global app_delegate, db
+        global app_delegate, db, bonjour_manager
         
         # Instantiate history database
         db = ClipboardHistoryDB()
+
+        # Instantiate and start Bonjour Manager
+        bonjour_manager = BonjourManager.alloc().init()
+        bonjour_manager.start()
+
+        # Start P2P TCP Server
+        threading.Thread(target=mac_tcp_server_loop, daemon=True).start()
         
         # Setup Status Bar
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
@@ -601,6 +808,25 @@ class ApplicationBootstrap(NSObject):
 
         menu.addItem_(NSMenuItem.separatorItem())
 
+        # Nearby sharing devices list
+        devices_header = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Nearby Share Devices:", None, "")
+        devices_header.setEnabled_(False)
+        menu.addItem_(devices_header)
+
+        if bonjour_manager and bonjour_manager.discovered_devices:
+            for name in bonjour_manager.discovered_devices:
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    f"  📱 {name} (Click to Send)", "sendFileToDevice:", ""
+                )
+                item.setRepresentedObject_(name)
+                menu.addItem_(item)
+        else:
+            no_devices_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("  No devices discovered", None, "")
+            no_devices_item.setEnabled_(False)
+            menu.addItem_(no_devices_item)
+
+        menu.addItem_(NSMenuItem.separatorItem())
+
         open_folder_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Open NothingDrop Folder", "openNothingDrop:", ""
         )
@@ -629,6 +855,30 @@ class ApplicationBootstrap(NSObject):
         if text:
             set_mac_clipboard("text", text)
             print(f"[UI] Restored from history: {text[:20]}...")
+
+    def sendFileToDevice_(self, sender):
+        device_name = sender.representedObject()
+        if not device_name or not bonjour_manager or device_name not in bonjour_manager.discovered_devices:
+            return
+            
+        host, port = bonjour_manager.discovered_devices[device_name]
+        
+        # Open file dialog on macOS main thread
+        from AppKit import NSOpenPanel
+        panel = NSOpenPanel.openPanel()
+        panel.setCanChooseFiles_(True)
+        panel.setCanChooseDirectories_(False)
+        panel.setAllowsMultipleSelection_(False)
+        
+        if panel.runModal() == 1:  # NSModalResponseOK
+            url = panel.URL()
+            file_path = url.path()
+            if file_path:
+                threading.Thread(
+                    target=mac_send_file_to_peer, 
+                    args=(file_path, device_name, host, port), 
+                    daemon=True
+                ).start()
 
     def openNothingDrop_(self, sender):
         workspace = NSWorkspace.sharedWorkspace()

@@ -43,7 +43,7 @@
         android:orientation="vertical"
         android:background="#111111"
         android:padding="20dp"
-        android:layout_marginTop="40dp"
+        android:layout_marginTop="32dp"
         app:layout_constraintTop_toBottomOf="@id/tvSubtitle"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
@@ -60,7 +60,7 @@
             android:id="@+id/tvStatusLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="CLIPBOARD SYNC ACTIVE"
+            android:text="AIRDROP SHARING ACTIVE"
             android:textColor="#FFFFFF"
             android:textSize="18sp"
             android:textStyle="bold"
@@ -71,13 +71,68 @@
             android:id="@+id/tvStatus"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Ready to share with Mac"
+            android:text="Ready for transfers and clipboard sync"
             android:textColor="#888888"
             android:textSize="14sp"
             android:layout_marginTop="4dp"/>
+
+        <!-- Progress Bar for File Transfers -->
+        <ProgressBar
+            android:id="@+id/progressBarTransfer"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="6dp"
+            android:layout_marginTop="16dp"
+            android:progressDrawable="@android:drawable/progress_horizontal"
+            android:progressTint="#FF0000"
+            android:progress="0"
+            android:visibility="gone"
+            tools:visibility="visible"/>
     </LinearLayout>
 
-    <!-- Test Inputs and Actions -->
+    <!-- Nearby Devices Section -->
+    <TextView
+        android:id="@+id/tvDevicesHeader"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="NEARBY DEVICES"
+        android:textColor="#FF0000"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:fontFamily="monospace"
+        android:layout_marginTop="24dp"
+        app:layout_constraintTop_toBottomOf="@id/widgetStatus"
+        app:layout_constraintStart_toStartOf="parent"/>
+
+    <ScrollView
+        android:id="@+id/svDevices"
+        android:layout_width="0dp"
+        android:layout_height="150dp"
+        android:layout_marginTop="8dp"
+        android:background="#111111"
+        app:layout_constraintTop_toBottomOf="@id/tvDevicesHeader"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:id="@+id/llDevicesContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+            
+            <TextView
+                android:id="@+id/tvNoDevices"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Scanning for Mac / iOS devices..."
+                android:textColor="#555555"
+                android:textSize="14sp"
+                android:fontFamily="monospace"/>
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Clipboard Sync Section -->
     <EditText
         android:id="@+id/etInput"
         android:layout_width="0dp"
@@ -87,8 +142,8 @@
         android:textColorHint="#555555"
         android:backgroundTint="#FFFFFF"
         android:fontFamily="monospace"
-        android:layout_marginTop="32dp"
-        app:layout_constraintTop_toBottomOf="@id/widgetStatus"
+        android:layout_marginTop="24dp"
+        app:layout_constraintTop_toBottomOf="@id/svDevices"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"/>
 
@@ -96,7 +151,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginTop="20dp"
+        android:layout_marginTop="16dp"
         app:layout_constraintTop_toBottomOf="@id/etInput"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
@@ -128,7 +183,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="CONNECTED OVER WIRELESS ADB"
+        android:text="CONNECTED OVER LOCAL WI-FI / ADB"
         android:textColor="#444444"
         android:textSize="10sp"
         android:fontFamily="monospace"
