@@ -10,10 +10,15 @@ from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSObject, NSWorkspace,
     NSPasteboard, NSStringPboardType, NSFilenamesPboardType,
-    NSImagePboardType, NSImage, NSBitmapImageRep, NSPNGFileType
+    NSTIFFPboardType, NSImage, NSBitmapImageRep, NSPNGFileType
 )
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
+# Ensure Homebrew and common directories are in PATH for subprocess calls
+for p in ["/opt/homebrew/bin", "/usr/local/bin"]:
+    if p not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{p}:{os.environ.get('PATH', '')}"
 
 # Configuration
 DROP_ZONE_MAC = os.path.expanduser("~/NothingDrop")
@@ -225,7 +230,7 @@ def get_mac_clipboard():
         if files: return {"type": "file", "data": files[0]}, change_count
         
     # 2. Check for Images
-    if pb.availableTypeFromArray_([NSImagePboardType]):
+    if pb.availableTypeFromArray_([NSTIFFPboardType]):
         image_data = pb.dataForType_(NSPNGFileType)
         if not image_data:
             image = NSImage.alloc().initWithPasteboard_(pb)
@@ -282,144 +287,6 @@ def get_macos_focus_state():
     except:
         return False
 
-# PyObjC Menu Bar Application Delegate
-class NothingSyncApp(NSObject):
-    def init(self):
-        self = super().init()
-        if self is None:
-            return None
-        self.battery_level = "--"
-        self.charging = False
-        self.connected = False
-        self.history = []
-        return self
-
-    def set_connected_(self, val):
-        self.connected = val
-        self.update_menu()
-
-    def update_battery_level_charging_(self, level, charging):
-        self.battery_level = str(level)
-        self.charging = charging
-        self.update_menu()
-
-    def update_menu(self):
-        self.performSelectorOnMainThread_withObject_waitUntilDone_(
-            "updateUIOnMainThread", None, False
-        )
-
-    def updateUIOnMainThread(self):
-        # 1. Update Title and Dot Status
-        if self.connected:
-            icon = "⚪️"
-            battery_str = f" {self.battery_level}%"
-            if self.charging:
-                battery_str += " ⚡️"
-            self.status_item.button().setTitle_(f"{icon}{battery_str}")
-        else:
-            self.status_item.button().setTitle_("⚫️")
-
-        # 2. Build Menu
-        menu = NSMenu.alloc().init()
-
-        # Connection Header
-        status_text = f"Nothing Phone: {'Connected' if self.connected else 'Searching...'}"
-        status_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(status_text, None, "")
-        status_item.setEnabled_(False)
-        menu.addItem_(status_item)
-
-        if self.connected:
-            battery_text = f"Battery: {self.battery_level}% {'(Charging)' if self.charging else ''}"
-            battery_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(battery_text, None, "")
-            battery_item.setEnabled_(False)
-            menu.addItem_(battery_item)
-
-        menu.addItem_(NSMenuItem.separatorItem())
-
-        # Clipboard History Submenu
-        history_menu = NSMenu.alloc().init()
-        self.history = db.get_history()
-        if not self.history:
-            empty_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("History empty", None, "")
-            empty_item.setEnabled_(False)
-            history_menu.addItem_(empty_item)
-        else:
-            for text in self.history:
-                display_text = text.replace('\n', ' ')
-                display_text = display_text if len(display_text) < 30 else f"{display_text[:27]}..."
-                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                    display_text, "restoreClipboard:", ""
-                )
-                item.setRepresentedObject_(text)
-                history_menu.addItem_(item)
-
-        history_parent = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Clipboard History", None, "")
-        history_parent.setSubmenu_(history_menu)
-        menu.addItem_(history_parent)
-
-        menu.addItem_(NSMenuItem.separatorItem())
-
-        # Folder Actions
-        open_folder_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Open NothingDrop Folder", "openNothingDrop:", ""
-        )
-        menu.addItem_(open_folder_item)
-
-        # Connection Actions
-        connect_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Connect Wireless ADB...", "connectADB:", ""
-        )
-        menu.addItem_(connect_item)
-
-        menu.addItem_(NSMenuItem.separatorItem())
-
-        # Quit Action
-        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Quit Nothing Sync", "quitApp:", "")
-        menu.addItem_(quit_item)
-
-        self.status_item.setMenu_(menu)
-
-    def restoreClipboard_(self, sender):
-        text = sender.representedObject()
-        if text:
-            set_mac_clipboard("text", text)
-            print(f"[UI] Restored from history: {text[:20]}...")
-
-    def openNothingDrop_(self, sender):
-        workspace = NSWorkspace.sharedWorkspace()
-        workspace.openFile_(DROP_ZONE_MAC)
-
-    def connectADB_(self, sender):
-        threading.Thread(target=self.show_connect_dialog).start()
-
-    def show_connect_dialog(self):
-        self.performSelectorOnMainThread_withObject_waitUntilDone_(
-            "runConnectDialogOnMainThread", None, True
-        )
-
-    def runConnectDialogOnMainThread(self):
-        from AppKit import NSAlert, NSTextField
-        alert = NSAlert.alloc().init()
-        alert.setMessageText_("Connect ADB Wireless")
-        alert.setInformativeText_("Enter Nothing Phone's IP and Port (e.g. 192.168.1.100:5555):")
-        alert.addButtonWithTitle_("Connect")
-        alert.addButtonWithTitle_("Cancel")
-        
-        input_field = NSTextField.alloc().initWithFrame_(((0, 0), (200, 24)))
-        input_field.setPlaceholderString_("192.168.1.100:5555")
-        alert.setAccessoryView_(input_field)
-        
-        response = alert.runModal()
-        if response == 1000:  # Connect clicked
-            address = input_field.stringValue()
-            if address:
-                # Store saved config
-                save_config({"last_address": address})
-                threading.Thread(target=run_adb_connect, args=(address,)).start()
-
-    def quitApp_(self, sender):
-        NSApplication.sharedApplication().terminate_(None)
-
 def run_adb_connect(address):
     print(f"[ADB] Attempting connection to: {address}")
     subprocess.run(["adb", "connect", address], capture_output=True)
@@ -443,7 +310,7 @@ def status_polling_loop():
                             status = int(line.split(":")[1].strip())
                             charging = status in (2, 5)
                     if level is not None:
-                        app_delegate.update_battery_level_charging_(level, charging)
+                        app_delegate.update_battery_level_charging(level, charging)
             except Exception as e:
                 print(f"[Battery] Error checking battery: {e}")
                 
@@ -534,12 +401,12 @@ def android_event_monitor():
                     continue
                 
                 if app_delegate:
-                    app_delegate.set_connected_(False)
+                    app_delegate.set_connected(False)
                 time.sleep(4)
                 continue
             
             if app_delegate:
-                app_delegate.set_connected_(True)
+                app_delegate.set_connected(True)
                 
             # Spawn persistent shell script
             proc = subprocess.Popen(
@@ -588,7 +455,7 @@ def android_event_monitor():
         except Exception as e:
             print(f"[ADB Stream] Connection broke: {e}")
             if app_delegate:
-                app_delegate.set_connected_(False)
+                app_delegate.set_connected(False)
         time.sleep(3)
 
 # App startup logic
@@ -621,11 +488,11 @@ class ApplicationBootstrap(NSObject):
         observer.schedule(MacDropHandler(), DROP_ZONE_MAC, recursive=False)
         observer.start()
 
-    def set_connected_(self, val):
+    def set_connected(self, val):
         self.connected = val
         self.update_menu()
 
-    def update_battery_level_charging_(self, level, charging):
+    def update_battery_level_charging(self, level, charging):
         self.battery_level = str(level)
         self.charging = charging
         self.update_menu()
