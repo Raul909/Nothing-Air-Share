@@ -2,9 +2,9 @@
 
 **Bridging the gap between iOS, macOS, and Nothing OS.**
 
-Let's be honest: AirDrop is the only thing keeping many of us on iPhone. But the Nothing Phone (2a), (2), and (1) have an aesthetic that's just... *chef's kiss*. 
+Let's be honest: AirDrop is the only thing keeping many of us on iPhone. But the entire Nothing Phone ecosystem (Phone 1, Phone 2, Phone 2a, Phone 2a Plus, and CMF Phone 1) has an aesthetic that's just... *chef's kiss*. 
 
-I built this project because I wanted the best of both worlds. I wanted my Nothing Phone to feel like it belonged in my Apple ecosystem without the "wall" getting in the way. This is a suite of tools designed to make file sharing and clipboard syncing between Mac, iOS, and Nothing Phone feel native, fast, and—most importantly—beautifully minimal.
+I built this project because I wanted the best of both worlds. I wanted my Nothing Phone (or any Nothing OS device) to feel like it belonged in my Apple ecosystem without the "wall" getting in the way. This is a suite of tools designed to make file sharing and clipboard syncing between Mac, iOS, and Nothing Phone feel native, fast, and—most importantly—beautifully minimal.
 
 ---
 
@@ -61,9 +61,40 @@ Unlike basic sync tools, this project is built for maximum performance:
 
 ----
 
-## 🛠 Setup & Connection Guide
+## 👶 Quick Start Guide (For Beginners)
 
-Setting up your devices for the first time takes just a few minutes. Follow these simple steps to get everything running.
+If you're not a developer and just want this to work, follow these easy steps!
+
+### 1. Prepare Your Phone
+1. Connect both your MacBook and your Nothing Phone to the **same Wi-Fi network**.
+2. On your Nothing Phone, go to **Settings > About phone > Software info**. Tap **Build number** 7 times to unlock Developer options.
+3. Go back to **Settings > System > Developer options**. Turn on **Wireless Debugging**.
+4. Tap the words **"Wireless Debugging"** and select **"Pair device with pairing code"**. Keep this screen open! You will see an IP address and a 6-digit code.
+
+### 2. Prepare Your Mac
+1. Open the **Terminal** app on your Mac (press `Cmd + Space`, type "Terminal", hit Enter).
+2. Copy and paste this single command, then hit Enter:
+   ```bash
+   git clone https://github.com/Raul909/Nothing-Air-Share.git ~/Nothing-Air-Share && cd ~/Nothing-Air-Share && python3 -m venv .venv && source .venv/bin/activate && pip install pyobjc-framework-Cocoa watchdog Pillow && python3 unified_sync.py
+   ```
+3. Look up at your Mac's menu bar (top right). You will see a new **Nothing Dot (`⚫️`)**! 
+
+### 3. Connect & Sync!
+1. In your Terminal, open a new tab (`Cmd + T`) and pair your phone by typing:
+   ```bash
+   adb pair [IP_ADDRESS_FROM_PHONE]
+   ```
+   *(It will ask for the 6-digit code).*
+2. Click the **Nothing Dot (`⚫️`)** in your Mac menu bar.
+3. Select **Connect Wireless ADB...** and type in your phone's main Wireless Debugging IP (e.g., `192.168.1.10:5555`).
+4. Once connected, click the dot again (it should now be `⚪️` with your battery level) and click **"Install Nothing AirShare APK..."** to wirelessly push the companion app to your phone.
+5. Open the **Nothing AirShare** app on your phone. You're done! Copy text on your Mac, and paste it on your phone instantly.
+
+---
+
+## 🛠 Advanced Setup Guide (For Developers)
+
+If you prefer to set up the environment manually or build the Android APK from source, follow these detailed steps.
 
 ---
 
