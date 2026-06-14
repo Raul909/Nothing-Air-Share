@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="64" viewBox="0 0 280 64">
+  <!-- Background pill -->
+  <rect x="2" y="2" width="276" height="60" rx="30" fill="#000000" stroke="#D32F2F" stroke-width="2.5"/>
+  <!-- Small red status dot on the left of text -->
+  <circle cx="35" cy="32" r="5" fill="#D32F2F"/>
+  <!-- Download Text -->
+  <text x="55" y="38" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="bold" fill="#FFFFFF" letter-spacing="1.5">DOWNLOAD LATEST APK</text>
+</svg>

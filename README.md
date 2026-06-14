@@ -4,7 +4,7 @@
 
 This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, etc.) and the Apple ecosystem. It completely eliminates the need for an intermediate bridge or third-party cloud accounts by using a **single Android APK**, a **lightweight macOS menu bar popover daemon**, and Apple's **built-in AirDrop/Universal Clipboard APIs**.
 
-[![Download APK](apk/download_btn.svg)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.6.0/NothingAirShare.apk)
+[![Download Latest APK](apk/download_latest.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
 ---
 
@@ -46,9 +46,12 @@ This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, e
 ## 📲 Install the Android Companion App
 
 ### Option A — Direct Download (Recommended)
-1. Download the APK to your phone:
+1. Download the latest version to your phone:
 
-   [![Download APK](apk/download_btn.svg)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.6.0/NothingAirShare.apk)
+   [![Download Latest APK](apk/download_latest.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+
+   **Previous Versions:**
+   [![v2.6.0](apk/version_v2.6.0.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.6.0/NothingAirShare.apk) &nbsp; [![v2.5.0](apk/version_v2.5.0.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.5.0/NothingAirShare.apk) &nbsp; [![v2.4.0](apk/version_v2.4.0.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.4.0/NothingAirShare.apk)
 
 2. Open the downloaded file on your Nothing Phone
 3. Tap **Install** (you may need to allow "Install from unknown sources" for your browser)
