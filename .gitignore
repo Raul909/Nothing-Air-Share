@@ -17,3 +17,16 @@ captures/
 .cxx/
 *.apk
 !apk/*.apk
+
+# Agent & IDE configs
+.claude/
+.gemini/
+.github/
+.kiro/
+.qoder/
+.vscode/
+.code-review-graph/
+.mcp.json
+.opencode.json
+.windsurfrules
+.cursorrules
