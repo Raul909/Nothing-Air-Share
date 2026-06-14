@@ -21,11 +21,20 @@ class ClipboardReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        val prefs = context.getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
+        val isClipboardEnabled = prefs.getBoolean("pref_clipboard_sync", true)
+        val isFindPhoneEnabled = prefs.getBoolean("pref_find_phone", true)
+
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val action = intent.action
         Log.d("ClipboardReceiver", "Received intent: $action")
 
         if ("clipper.set" == action) {
+            if (!isClipboardEnabled) {
+                Log.d("ClipboardReceiver", "Clipboard Sync is disabled in settings.")
+                setResult(1, "Clipboard Sync is disabled in settings.", null)
+                return
+            }
             val text = intent.getStringExtra("text")
             if (text != null) {
                 try {
@@ -41,6 +50,10 @@ class ClipboardReceiver : BroadcastReceiver() {
                 setResult(1, "No text provided.", null)
             }
         } else if ("clipper.get" == action) {
+            if (!isClipboardEnabled) {
+                setResult(0, "", null)
+                return
+            }
             val clip = clipboard.primaryClip
             if (clip != null && clip.itemCount > 0) {
                 val text = clip.getItemAt(0).text?.toString() ?: ""
@@ -53,6 +66,10 @@ class ClipboardReceiver : BroadcastReceiver() {
                 setResult(0, "", null)
             }
         } else if ("clipper.ring" == action) {
+            if (!isFindPhoneEnabled) {
+                Log.d("ClipboardReceiver", "Find Phone requested but disabled in settings.")
+                return
+            }
             try {
                 activeRingtone?.let {
                     if (it.isPlaying) {

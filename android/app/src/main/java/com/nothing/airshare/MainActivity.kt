@@ -159,10 +159,16 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         // Load settings values into inputs
         val savedMacIp = prefs.getString("mac_ip", "") ?: ""
         val savedMacPort = prefs.getInt("mac_port", 53318)
+        val savedClipboardSync = prefs.getBoolean("pref_clipboard_sync", true)
+        val savedFindPhone = prefs.getBoolean("pref_find_phone", true)
+        val savedRemoteInput = prefs.getBoolean("pref_remote_input", true)
         
         binding.etMacIp.setText(savedMacIp)
         binding.etMacPort.setText(savedMacPort.toString())
         binding.etLocalPort.setText(savedLocalPort.toString())
+        binding.switchClipboardSync.isChecked = savedClipboardSync
+        binding.switchFindPhone.isChecked = savedFindPhone
+        binding.switchRemoteInput.isChecked = savedRemoteInput
 
         // Drawer click handlers
         binding.drawerSettings.setOnClickListener {
@@ -187,11 +193,17 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
 
             val macPort = macPortStr.toIntOrNull() ?: 53318
             val localPort = localPortStr.toIntOrNull() ?: 53317
+            val clipboardSync = binding.switchClipboardSync.isChecked
+            val findPhone = binding.switchFindPhone.isChecked
+            val remoteInput = binding.switchRemoteInput.isChecked
 
             prefs.edit().apply {
                 putString("mac_ip", macIp)
                 putInt("mac_port", macPort)
                 putInt("local_port", localPort)
+                putBoolean("pref_clipboard_sync", clipboardSync)
+                putBoolean("pref_find_phone", findPhone)
+                putBoolean("pref_remote_input", remoteInput)
                 apply()
             }
 
@@ -227,6 +239,11 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         }
 
         binding.cardClipboard.setOnClickListener {
+            val enabled = prefs.getBoolean("pref_clipboard_sync", true)
+            if (!enabled) {
+                Toast.makeText(this, "Clipboard Sync plugin is disabled in Settings", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             isClipboardExpanded = !isClipboardExpanded
             binding.panelClipboard.visibility = if (isClipboardExpanded) View.VISIBLE else View.GONE
             binding.cardClipboard.background = getDrawable(
@@ -235,7 +252,12 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         }
 
         binding.cardRemoteInput.setOnClickListener {
-            binding.overlayTrackpad.visibility = View.VISIBLE
+            val enabled = prefs.getBoolean("pref_remote_input", true)
+            if (enabled) {
+                binding.overlayTrackpad.visibility = View.VISIBLE
+            } else {
+                Toast.makeText(this, "Remote Trackpad plugin is disabled in Settings", Toast.LENGTH_SHORT).show()
+            }
         }
 
         binding.cardMedia.setOnClickListener {

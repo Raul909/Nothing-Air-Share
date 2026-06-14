@@ -782,6 +782,55 @@
                             android:layout_marginTop="6dp"
                             android:inputType="number" />
 
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="@color/divider"
+                            android:layout_marginVertical="24dp" />
+
+                        <!-- Section: Active Plugins -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="ACTIVE PLUGINS"
+                            android:textColor="@color/nothing_red"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:fontFamily="@font/ndot57" />
+
+                        <androidx.appcompat.widget.SwitchCompat
+                            android:id="@+id/switchClipboardSync"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:text="Clipboard Sync"
+                            android:textColor="@color/white"
+                            android:fontFamily="@font/letteramono"
+                            android:checked="true"
+                            android:thumbTint="@color/white"
+                            android:trackTint="@color/nothing_red_tint" />
+
+                        <androidx.appcompat.widget.SwitchCompat
+                            android:id="@+id/switchFindPhone"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:text="Find My Phone (Ring)"
+                            android:textColor="@color/white"
+                            android:fontFamily="@font/letteramono"
+                            android:checked="true"
+                            android:thumbTint="@color/white"
+                            android:trackTint="@color/nothing_red_tint" />
+
+                        <androidx.appcompat.widget.SwitchCompat
+                            android:id="@+id/switchRemoteInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:text="Remote Trackpad Input"
+                            android:textColor="@color/white"
+                            android:fontFamily="@font/letteramono"
+                            android:checked="true"
+                            android:thumbTint="@color/white"
+                            android:trackTint="@color/nothing_red_tint" />
+
                         <Space
                             android:layout_width="match_parent"
                             android:layout_height="32dp" />

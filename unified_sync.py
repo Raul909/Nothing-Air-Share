@@ -1029,7 +1029,7 @@ class NothingPopoverViewController(NSViewController):
         title_label.setFrame_(((32, 10), (200, 20)))
         header_bg.addSubview_(title_label)
         
-        version_label = NSTextField.labelWithString_("v2.5.0")
+        version_label = NSTextField.labelWithString_("v2.6.0")
         version_label.setFont_(NSFont.systemFontOfSize_(10))
         version_label.setTextColor_(NSColor.grayColor())
         version_label.setFrame_(((300, 10), (44, 20)))
