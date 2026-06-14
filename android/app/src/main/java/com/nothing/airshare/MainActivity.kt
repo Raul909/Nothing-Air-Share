@@ -74,12 +74,17 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         clipboard.addPrimaryClipChangedListener(clipboardListener)
         updateClipboardUI()
 
+        // Initialize settings
+        val prefs = getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
+        val savedLocalPort = prefs.getInt("local_port", 53317)
+        FileTransferService.port = savedLocalPort
+
         // Handle incoming share intents
         handleSendIntent(intent)
 
         // 1. Initialize NSD Bonjour Discovery & Advertising
         nsdHelper = NsdHelper(this, this)
-        nsdHelper.registerService(53317)
+        nsdHelper.registerService(savedLocalPort)
         nsdHelper.discoverServices()
 
         // 2. Initialize TCP Server
@@ -150,6 +155,66 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
 
         // Set device name in drawer header
         binding.tvDeviceName.text = Build.MODEL
+
+        // Load settings values into inputs
+        val savedMacIp = prefs.getString("mac_ip", "") ?: ""
+        val savedMacPort = prefs.getInt("mac_port", 53318)
+        
+        binding.etMacIp.setText(savedMacIp)
+        binding.etMacPort.setText(savedMacPort.toString())
+        binding.etLocalPort.setText(savedLocalPort.toString())
+
+        // Drawer click handlers
+        binding.drawerSettings.setOnClickListener {
+            drawerLayout.closeDrawer(GravityCompat.START)
+            binding.overlaySettings.visibility = View.VISIBLE
+        }
+
+        binding.drawerAbout.setOnClickListener {
+            drawerLayout.closeDrawer(GravityCompat.START)
+            binding.overlayAbout.visibility = View.VISIBLE
+        }
+
+        // --- Settings Overlay Handlers ---
+        binding.btnBackSettings.setOnClickListener {
+            binding.overlaySettings.visibility = View.GONE
+        }
+
+        binding.btnSaveSettings.setOnClickListener {
+            val macIp = binding.etMacIp.text.toString().trim()
+            val macPortStr = binding.etMacPort.text.toString().trim()
+            val localPortStr = binding.etLocalPort.text.toString().trim()
+
+            val macPort = macPortStr.toIntOrNull() ?: 53318
+            val localPort = localPortStr.toIntOrNull() ?: 53317
+
+            prefs.edit().apply {
+                putString("mac_ip", macIp)
+                putInt("mac_port", macPort)
+                putInt("local_port", localPort)
+                apply()
+            }
+
+            // Update local server port and restart server if local port changed
+            if (FileTransferService.port != localPort) {
+                FileTransferService.stopServer()
+                FileTransferService.port = localPort
+                FileTransferService.startServer()
+                
+                // Re-register NSD service with new port
+                nsdHelper.stop()
+                nsdHelper.registerService(localPort)
+                nsdHelper.discoverServices()
+            }
+
+            Toast.makeText(this, "Settings Saved Successfully", Toast.LENGTH_SHORT).show()
+            binding.overlaySettings.visibility = View.GONE
+        }
+
+        // --- About Overlay Handlers ---
+        binding.btnBackAbout.setOnClickListener {
+            binding.overlayAbout.visibility = View.GONE
+        }
 
         // --- Card click handlers ---
         binding.cardSendFiles.setOnClickListener {
@@ -229,6 +294,12 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
             }
             binding.overlayMedia.visibility == View.VISIBLE -> {
                 binding.overlayMedia.visibility = View.GONE
+            }
+            binding.overlaySettings.visibility == View.VISIBLE -> {
+                binding.overlaySettings.visibility = View.GONE
+            }
+            binding.overlayAbout.visibility == View.VISIBLE -> {
+                binding.overlayAbout.visibility = View.GONE
             }
             drawerLayout.isDrawerOpen(GravityCompat.START) -> {
                 drawerLayout.closeDrawer(GravityCompat.START)

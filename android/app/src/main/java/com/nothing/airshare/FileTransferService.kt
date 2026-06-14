@@ -14,7 +14,7 @@ import java.net.InetAddress
 import kotlin.concurrent.thread
 
 object FileTransferService {
-    private const val PORT = 53317
+    var port: Int = 53317
     private var serverSocket: ServerSocket? = null
     private var isRunning = false
 
@@ -29,8 +29,8 @@ object FileTransferService {
         
         thread {
             try {
-                serverSocket = ServerSocket(PORT)
-                Log.d("TransferService", "TCP Server listening on port $PORT")
+                serverSocket = ServerSocket(port)
+                Log.d("TransferService", "TCP Server listening on port $port")
                 
                 while (isRunning) {
                     val clientSocket = serverSocket?.accept()
