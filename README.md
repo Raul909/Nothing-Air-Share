@@ -8,101 +8,209 @@ This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, e
 
 ---
 
-## ⚡️ Ecosystem Architecture (How It Works)
+## ⚡️ Ecosystem Architecture
 
 ```
-   [ Nothing Phone ]                 [ MacBook ]                    [ iPhone / iPad ]
-           │                              │                                 │
-           │ ─── Wireless ADB Sync ─────► │ ◄─── Native Apple AirDrop ───── │  (File Transfer)
-           │      (Background Stream)     │                                 │
-           │ ◄─── Wi-Fi Direct Sockets ──►│ ◄─── Universal Clipboard ────── │  (Clipboard & Remote)
-           │      (Media, Input, P2P)     │                                 │
+                           ┌──────────────────┐
+                           │     MacBook       │
+                           │  (Menu Bar ⚫️)    │
+                           │                  │
+                           │  unified_sync.py │
+                           └────────┬─────────┘
+                                    │
+                 ┌──────────────────┼──────────────────┐
+                 │                  │                   │
+          Wireless ADB        Wi-Fi Direct       Apple Native
+        (Background Sync)     (P2P Sockets)     (AirDrop + UC)
+                 │                  │                   │
+    ┌────────────▼───────┐          │       ┌───────────▼──────────┐
+    │   Nothing Phone    │◄─────────┘       │   iPhone / iPad      │
+    │                    │                  │                      │
+    │  NothingAirShare   │                  │  No app required —   │
+    │  Companion App     │                  │  uses native AirDrop │
+    │  (APK v2.5.0)      │                  │  & Universal         │
+    │                    │                  │  Clipboard           │
+    └────────────────────┘                  └──────────────────────┘
 ```
 
-1. **Android**: A single background APK (`NothingAirShare.apk`) that acts as a native clipboard listener and integrates into the Android Share Sheet.
-2. **macOS**: A menu bar status item (`unified_sync.py`) running in the background. It manages ADB communication with the phone, monitors clipboard pasteboards, and forwards files.
-3. **iOS**: No custom apps required. Uses Apple's native **AirDrop** and **Universal Clipboard** to send/receive files and clipboards via the Mac.
+**Three components, one seamless loop:**
+
+| Component | What It Does |
+|---|---|
+| **Android APK** | Native clipboard listener, Share Sheet integration, P2P file sender, card-grid dashboard with trackpad & media remote |
+| **macOS Daemon** | Menu bar status item (`⚫️`/`⚪️`), manages ADB stream, clipboard bridge, Bonjour discovery, TCP file server, AirDrop forwarder |
+| **iOS** | Zero setup — Apple's native AirDrop and Universal Clipboard flow through the Mac automatically |
 
 ---
 
-## 🚀 Quick Setup
+## 📲 Install the Android Companion App
 
-### 1. Prepare Your Nothing Phone
-1. Connect your phone and Mac to the **same Wi-Fi network**.
-2. Go to **Settings > About phone > Software info** and tap **Build number** 7 times.
-3. Go to **Settings > System > Developer options**, enable **Wireless Debugging**, and tap it to open the submenu.
-4. Tap **Pair device with pairing code** (keep this screen open showing the IP:Port and 6-digit code).
+### Option A — Direct Download (Recommended)
+1. Download the APK to your phone:
 
-### 2. Install & Run on macOS
-Open **Terminal** on your Mac and run:
+   [![Download APK](apk/download_btn.svg)](https://github.com/Raul909/Nothing-Air-Share/raw/main/apk/NothingAirShare.apk)
+
+2. Open the downloaded file on your Nothing Phone
+3. Tap **Install** (you may need to allow "Install from unknown sources" for your browser)
+4. Open **Nothing AirShare** once to activate background clipboard sync
+
+### Option B — Install Over ADB from Mac
+Once the Mac daemon is running and connected (see below):
+1. Click the `⚫️` menu bar icon
+2. Select **Install Nothing AirShare APK...**
+3. The APK is pushed and installed wirelessly — open it on your phone once
+
+---
+
+## 🖥️ Install the macOS Sync Daemon
+
+### Prerequisites
+- macOS 12 Monterey or later
+- [Homebrew](https://brew.sh) installed
+- Python 3.9+
+
+### Step-by-Step Installation
+
+**1. Install ADB (Android Debug Bridge)**
 ```bash
-# 1. Install ADB (if not already installed)
 brew install android-platform-tools
+```
 
-# 2. Clone the repository and install requirements
+**2. Clone this repository**
+```bash
 git clone https://github.com/Raul909/Nothing-Air-Share.git ~/Nothing-Air-Share
 cd ~/Nothing-Air-Share
+```
+
+**3. Create a Python virtual environment and install dependencies**
+```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install pyobjc-framework-Cocoa watchdog Pillow
+```
+
+**4. Launch the daemon**
+```bash
 python3 unified_sync.py
 ```
 
-### 3. Connect & Pair
-1. A **Nothing Dot (`⚫️`)** will appear in your Mac's menu bar.
-2. Pair your phone in Terminal using the IP:Port from your phone's screen:
-   ```bash
-   adb pair [IP_ADDRESS:PORT]
-   # Enter the 6-digit pairing code when prompted
-   ```
-3. Click the `⚫️` menu bar icon, select **Connect Wireless ADB...**, and enter your phone's active Wireless Debugging IP and port (e.g., `192.168.1.100:5555`).
-4. Once connected (`⚪️`), select **Install Nothing AirShare APK...** from the menu bar to install the companion Android app automatically. Open the app on your phone once to activate sync.
+A **Nothing Dot (`⚫️`)** will appear in your Mac's menu bar. You're running!
 
 ---
 
-## 🔄 The Features (In Action)
+## 🔗 Connect Your Nothing Phone
 
-### 📱 Nothing OS & KDE Connect Redesigned Companion App
-- **Card-Grid Dashboard**: A pure black, white, and red (`#D32F2F`) interface featuring action cards for file transfers, clipboard sync, remote input, and media controls.
-- **NDOT Dot-Matrix Typography**: System-wide integration of Nothing's signature dot-matrix fonts (`ndot55`, `ndot57`, and `letteramono` monospace) to make the app feel natively part of the OS.
-- **Navigation Drawer Layout**: Inspired by KDE Connect, nearby device discovery (`llDevicesContainer` / `tvNoDevices`) is cleanly integrated inside a slide-out panel, with support for real-time connection status.
-- **Remote Input (Trackpad)**: A full-screen trackpad overlay with custom touch sensitivity and gesture mapping.
-- **Media Remote Overlay**: Transport controls (Play/Pause, Previous, Next) to control Mac media sessions.
+### First-Time Pairing (One-Time Setup)
 
-### 📋 Seamless Clipboard Synchronization
-- **Mac ➔ Nothing Phone**: Copy any text or link on your Mac (`Cmd+C`). It is instantly pushed and written to your phone's system clipboard in the background.
-- **Nothing Phone ➔ Mac**: Copy text on your phone. It is immediately synced to your Mac's system clipboard (press `Cmd+V` to paste).
-- **iPhone ➔ Nothing Phone (and vice-versa)**: By utilizing Apple's built-in **Universal Clipboard**, copying text on your iPhone automatically populates the Mac clipboard, which is then instantly forwarded to your Nothing Phone (and vice-versa).
-- **Clipboard History**: Click the macOS status bar dot and hover over **Clipboard History** to restore any of the last 50 clipboard items.
+**On your Nothing Phone:**
+1. Go to **Settings > About phone > Software info**
+2. Tap **Build number** 7 times to enable Developer Options
+3. Go to **Settings > System > Developer options**
+4. Enable **Wireless Debugging** and tap into it
+5. Tap **Pair device with pairing code** — note the `IP:Port` and 6-digit code shown
 
-### 📁 Direct File Sharing (Zero-Config)
-- **Mac ➔ Nothing Phone**: Drag and drop any file into the `~/NothingDrop` folder on your Mac. It is automatically pushed to your phone's `Download/NothingDrop/` directory and triggers an Essential Glyph light flash.
-- **Nothing Phone ➔ Mac**: Tap **Share** on any photo, video, or file on your phone, and choose **Nothing AirShare** (or pick a file inside the app). The file is immediately pulled to your Mac, deleted from the phone to save space, and routed:
-  - Images/Screenshots go to `~/Pictures/NothingDrop/`
-  - Documents (.pdf, .txt, etc.) go to `~/Documents/NothingDrop/`
-  - Other files go to `~/NothingDrop/`
-  - All pulled files are indexed instantly for macOS Spotlight search (`Cmd+Space`).
-- **P2P Wi-Fi Sharing (AirDrop-like Direct Socket)**:
-  - **Phone ➔ Mac**: Open the app on your phone, see your MacBook under **Nearby Devices**, tap **SEND**, select a file, and accept the macOS confirmation dialog to stream it directly over local Wi-Fi.
-  - **Mac ➔ Phone**: Click on your Nothing Phone's name under **"Nearby Share Devices"** in the Mac menu bar dot menu, choose a file, and accept the confirmation dialog on your phone to stream it directly.
-- **iPhone ➔ Nothing Phone**: AirDrop any file natively from your iPhone to your Mac. The Mac daemon watches the `~/Downloads` directory for AirDropped files and automatically forwards them to the Nothing Phone over ADB.
-- **Nothing Phone ➔ iPhone**: When a file is pulled from your phone, the Mac menu bar icon updates with a new action: **"AirDrop '[filename]' to iOS..."**. Clicking it immediately opens macOS's native AirDrop share sheet, allowing you to send it to your iPhone with a single click.
-
-### 🌙 Focus Mode Synchronization
-- Toggle **Do Not Disturb** on your Mac. Your Nothing Phone will automatically turn on Do Not Disturb / Zen Mode. Turning it off restores the phone to normal.
-
----
-
-## ⚙️ Run on Startup (macOS)
-To run the sync service automatically in the background on login:
+**On your Mac (Terminal):**
 ```bash
-cp com.nothing.clipboard-sync.plist ~/Library/LaunchAgents/
+adb pair 192.168.1.100:12345
+# Enter the 6-digit pairing code when prompted
+```
+
+### Connecting (After Pairing)
+
+1. Click the `⚫️` icon in your Mac's menu bar
+2. Select **Connect Wireless ADB...**
+3. Enter your phone's Wireless Debugging IP and port (e.g., `192.168.1.100:5555`)
+4. The dot turns **white (`⚪️`)** when connected, along with battery percentage
+
+> **Tip:** The daemon remembers your last connection address and auto-reconnects on startup.
+
+---
+
+## 📖 How to Use
+
+### 📋 Clipboard Sync
+| Direction | How |
+|---|---|
+| **Mac → Phone** | Copy anything on your Mac (`Cmd+C`) — it's instantly pushed to your phone's clipboard |
+| **Phone → Mac** | Copy text on your phone — it appears on your Mac clipboard within 1 second |
+| **iPhone → Phone** | Copy on iPhone → Universal Clipboard syncs to Mac → Mac forwards to phone |
+| **Clipboard History** | Click `⚫️` menu bar → hover **Clipboard History** → click any of the last 50 items to restore |
+
+### 📁 File Sharing
+| Direction | How |
+|---|---|
+| **Mac → Phone** | Drag any file into `~/NothingDrop` on your Mac — it's automatically pushed to the phone |
+| **Phone → Mac** | Tap **Share** on any file → choose **Nothing AirShare**, or open the app and tap **SEND FILES** |
+| **Phone → Mac (P2P)** | Open app → see your Mac under **Nearby Devices** in the drawer → tap **SEND** → pick file |
+| **Mac → Phone (P2P)** | Click `⚫️` → click your phone under **Nearby Share Devices** → pick a file to send |
+| **iPhone → Phone** | AirDrop a file from iPhone to Mac — the daemon auto-forwards it to your phone |
+| **Phone → iPhone** | After receiving a file from phone, click `⚫️` → **AirDrop '[filename]' to iOS...** |
+
+### 📁 Smart File Routing (Phone → Mac)
+Files pulled from your phone are automatically sorted:
+| File Type | Destination |
+|---|---|
+| Images (`.jpg`, `.png`, `.heic`, etc.) | `~/Pictures/NothingDrop/` |
+| Documents (`.pdf`, `.docx`, `.txt`, etc.) | `~/Documents/NothingDrop/` |
+| Everything else | `~/NothingDrop/` |
+
+All received files are indexed by **Spotlight** — find them instantly with `Cmd+Space`.
+
+### 📱 Companion App Features
+| Card | What It Does |
+|---|---|
+| **SEND FILES** | Opens the file picker to send a file to your Mac via Wi-Fi P2P or ADB |
+| **CLIPBOARD SYNC** | Expands an inline text field — type and tap **COPY TO SYNC** to push to Mac |
+| **REMOTE INPUT** | Opens a full-screen trackpad — move your finger to control your Mac's cursor |
+| **MEDIA REMOTE** | Opens transport controls (⏮ ⏯ ⏭) to control Mac media playback |
+| **☰ Drawer** | Slide open to see discovered nearby devices, settings, and about info |
+
+### 🌙 Focus Mode Sync
+Toggle **Do Not Disturb** on your Mac → your Nothing Phone's DND / Zen Mode follows automatically.
+
+---
+
+## ⚙️ Keep It Running (Run on Mac Startup)
+
+### Option A — LaunchAgent (Recommended)
+
+This makes the daemon start automatically every time you log in and restart it if it crashes:
+
+**Install:**
+```bash
+# Copy the LaunchAgent plist (edit paths if you cloned elsewhere)
+cp ~/Nothing-Air-Share/com.nothing.clipboard-sync.plist ~/Library/LaunchAgents/
+
+# Load it
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nothing.clipboard-sync.plist
 ```
 
-To stop:
+That's it — the `⚫️` dot will appear in your menu bar on every login.
+
+**Check logs:**
+```bash
+# Stdout log
+cat /tmp/nothing_clipboard_sync.log
+
+# Error log
+cat /tmp/nothing_clipboard_sync.err
+```
+
+**Uninstall / Stop:**
 ```bash
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.nothing.clipboard-sync.plist
+rm ~/Library/LaunchAgents/com.nothing.clipboard-sync.plist
 ```
+
+### Option B — Run Manually When Needed
+```bash
+cd ~/Nothing-Air-Share
+source .venv/bin/activate
+python3 unified_sync.py
+```
+Press `Ctrl+C` to stop. The `⚫️` dot disappears from the menu bar.
+
+> **Why not a `.dmg`?**
+> The macOS component uses `pyobjc` (Python-to-Cocoa bridge) and requires `adb` (Android platform tools). Bundling these into a standalone `.app` with PyInstaller/py2app produces a 200+ MB package that macOS Gatekeeper blocks without an Apple Developer Certificate ($99/yr for code-signing). The LaunchAgent approach is lighter, more transparent, and auto-updates when you `git pull`.
 
 ---
 
