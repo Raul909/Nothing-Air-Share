@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="card_corner_radius">16dp</dimen>
+    <dimen name="card_padding">20dp</dimen>
+    <dimen name="card_min_height">130dp</dimen>
+    <dimen name="card_gap">12dp</dimen>
+    <dimen name="btn_corner_radius">20dp</dimen>
+    <dimen name="screen_padding">20dp</dimen>
+    <dimen name="toolbar_height">56dp</dimen>
+    <dimen name="drawer_width">280dp</dimen>
+    <dimen name="icon_size_card">28dp</dimen>
+</resources>

@@ -5,11 +5,13 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
@@ -18,7 +20,10 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.res.ResourcesCompat
+import androidx.core.view.GravityCompat
 import androidx.core.view.setPadding
+import androidx.drawerlayout.widget.DrawerLayout
 import com.nothing.airshare.databinding.ActivityMainBinding
 import java.io.File
 import java.io.FileInputStream
@@ -30,6 +35,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
     private lateinit var nsdHelper: NsdHelper
     private val discoveredDevices = mutableMapOf<String, Pair<InetAddress, Int>>()
     private var selectedDeviceTarget: Pair<InetAddress, Int>? = null
+    private var isClipboardExpanded = false
     private lateinit var clipboard: ClipboardManager
     private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
         updateClipboardUI()
@@ -135,12 +141,100 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
 
         // Start polling the outgoing folder and updating UI
         handler.post(checkFolderRunnable)
+
+        // --- Drawer setup ---
+        val drawerLayout = binding.root
+        binding.btnMenu.setOnClickListener {
+            drawerLayout.openDrawer(GravityCompat.START)
+        }
+
+        // Set device name in drawer header
+        binding.tvDeviceName.text = Build.MODEL
+
+        // --- Card click handlers ---
+        binding.cardSendFiles.setOnClickListener {
+            selectedDeviceTarget?.let {
+                filePickerLauncher.launch("*/*")
+            } ?: run {
+                // No device selected — open file picker anyway for ADB queue
+                filePickerLauncher.launch("*/*")
+            }
+        }
+
+        binding.cardClipboard.setOnClickListener {
+            isClipboardExpanded = !isClipboardExpanded
+            binding.panelClipboard.visibility = if (isClipboardExpanded) View.VISIBLE else View.GONE
+            binding.cardClipboard.background = getDrawable(
+                if (isClipboardExpanded) R.drawable.card_bg_active else R.drawable.card_bg
+            )
+        }
+
+        binding.cardRemoteInput.setOnClickListener {
+            binding.overlayTrackpad.visibility = View.VISIBLE
+        }
+
+        binding.cardMedia.setOnClickListener {
+            binding.overlayMedia.visibility = View.VISIBLE
+        }
+
+        // --- Overlay back buttons ---
+        binding.btnBackTrackpad.setOnClickListener {
+            binding.overlayTrackpad.visibility = View.GONE
+        }
+
+        binding.btnBackMedia.setOnClickListener {
+            binding.overlayMedia.visibility = View.GONE
+        }
+
+        // --- Trackpad touch handling ---
+        binding.trackpadSurface.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                    // Visual feedback: update a cursor dot position
+                    binding.trackpadCursor.x = event.x - 12f
+                    binding.trackpadCursor.y = event.y - 12f
+                    binding.trackpadCursor.visibility = View.VISIBLE
+                }
+                MotionEvent.ACTION_UP -> {
+                    binding.trackpadCursor.visibility = View.INVISIBLE
+                }
+            }
+            true
+        }
+
+        // --- Media button placeholders ---
+        binding.btnPlayPause.setOnClickListener {
+            Toast.makeText(this, "Media control: awaiting Mac connection", Toast.LENGTH_SHORT).show()
+        }
+        binding.btnPrev.setOnClickListener {
+            Toast.makeText(this, "Previous track: awaiting Mac connection", Toast.LENGTH_SHORT).show()
+        }
+        binding.btnNext.setOnClickListener {
+            Toast.makeText(this, "Next track: awaiting Mac connection", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleSendIntent(intent)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        val drawerLayout = binding.root
+        when {
+            binding.overlayTrackpad.visibility == View.VISIBLE -> {
+                binding.overlayTrackpad.visibility = View.GONE
+            }
+            binding.overlayMedia.visibility == View.VISIBLE -> {
+                binding.overlayMedia.visibility = View.GONE
+            }
+            drawerLayout.isDrawerOpen(GravityCompat.START) -> {
+                drawerLayout.closeDrawer(GravityCompat.START)
+            }
+            else -> super.onBackPressed()
+        }
     }
 
     private fun handleSendIntent(intent: Intent) {
@@ -243,15 +337,15 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
                 text = "📱 $name"
                 setTextColor(0xFFFFFFFF.toInt())
                 textSize = 14f
-                typeface = android.graphics.Typeface.MONOSPACE
+                typeface = ResourcesCompat.getFont(this@MainActivity, R.font.letteramono)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
 
             val btnSend = Button(this).apply {
                 text = "SEND"
-                backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFFF0000.toInt())
+                backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(R.color.nothing_red))
                 setTextColor(0xFFFFFFFF.toInt())
-                typeface = android.graphics.Typeface.MONOSPACE
+                typeface = ResourcesCompat.getFont(this@MainActivity, R.font.ndot57)
                 textSize = 12f
                 setOnClickListener {
                     selectedDeviceTarget = target
@@ -280,7 +374,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
                 text = "📤 ${file.name} (${formatFileSize(file.length())}) [Pending ADB]"
                 setTextColor(0xFF888888.toInt())
                 textSize = 13f
-                typeface = android.graphics.Typeface.MONOSPACE
+                typeface = ResourcesCompat.getFont(this@MainActivity, R.font.letteramono)
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT

@@ -1,3 +1,26 @@
 <resources>
     <string name="app_name">Nothing AirShare</string>
+    <string name="title_nothing">NOTHING</string>
+    <string name="subtitle_airshare">AIRSHARE</string>
+    <string name="status_active">SHARING ACTIVE</string>
+    <string name="status_ready">Ready for transfers and clipboard sync</string>
+    <string name="card_send_files">SEND FILES</string>
+    <string name="card_send_files_desc">Share files and URLs between devices</string>
+    <string name="card_clipboard">CLIPBOARD SYNC</string>
+    <string name="card_clipboard_desc">Share clipboard content</string>
+    <string name="card_remote_input">REMOTE INPUT</string>
+    <string name="card_remote_input_desc">Use phone as trackpad</string>
+    <string name="card_media">MEDIA REMOTE</string>
+    <string name="card_media_desc">Control media playback</string>
+    <string name="drawer_devices_header">NEARBY DEVICES</string>
+    <string name="drawer_settings">SETTINGS</string>
+    <string name="drawer_about">ABOUT</string>
+    <string name="scan_devices">SCAN FOR DEVICES</string>
+    <string name="no_devices">Scanning for Mac / iOS devices…</string>
+    <string name="hint_clipboard">Type text to sync…</string>
+    <string name="btn_copy">COPY TO SYNC</string>
+    <string name="btn_paste">PASTE LAST</string>
+    <string name="trackpad_instructions">Move a finger on the screen to move the mouse cursor. Tap for a click. Use two fingers to scroll. Long press to drag and drop.</string>
+    <string name="footer_text">CONNECTED OVER LOCAL WI-FI / ADB</string>
+    <string name="media_awaiting">Awaiting media session…</string>
 </resources>

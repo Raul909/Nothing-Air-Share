@@ -4,7 +4,7 @@
 
 This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, etc.) and the Apple ecosystem. It completely eliminates the need for an intermediate bridge or third-party cloud accounts by using a **single Android APK**, a **lightweight macOS menu bar daemon**, and Apple's **built-in AirDrop/Universal Clipboard APIs**.
 
-📦 **[Download NothingAirShare.apk (v2.5.0)](apk/NothingAirShare.apk)**
+📦 **[Download NothingAirShare.apk (v2.5.0)](https://github.com/Raul909/Nothing-Air-Share/raw/main/apk/NothingAirShare.apk)**
 
 ---
 
@@ -59,6 +59,13 @@ python3 unified_sync.py
 ---
 
 ## 🔄 The Features (In Action)
+
+### 📱 Nothing OS & KDE Connect Redesigned Companion App
+- **Card-Grid Dashboard**: A pure black, white, and red (`#D32F2F`) interface featuring action cards for file transfers, clipboard sync, remote input, and media controls.
+- **NDOT Dot-Matrix Typography**: System-wide integration of Nothing's signature dot-matrix fonts (`ndot55`, `ndot57`, and `letteramono` monospace) to make the app feel natively part of the OS.
+- **Navigation Drawer Layout**: Inspired by KDE Connect, nearby device discovery (`llDevicesContainer` / `tvNoDevices`) is cleanly integrated inside a slide-out panel, with support for real-time connection status.
+- **Remote Input (Trackpad)**: A full-screen trackpad overlay with custom touch sensitivity and gesture mapping.
+- **Media Remote Overlay**: Transport controls (Play/Pause, Previous, Next) to control Mac media sessions.
 
 ### 📋 Seamless Clipboard Synchronization
 - **Mac ➔ Nothing Phone**: Copy any text or link on your Mac (`Cmd+C`). It is instantly pushed and written to your phone's system clipboard in the background.
