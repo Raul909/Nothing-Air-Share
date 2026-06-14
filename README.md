@@ -4,7 +4,7 @@
 
 This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, etc.) and the Apple ecosystem. It completely eliminates the need for an intermediate bridge or third-party cloud accounts by using a **single Android APK**, a **lightweight macOS menu bar popover daemon**, and Apple's **built-in AirDrop/Universal Clipboard APIs**.
 
-[![Download Latest APK](apk/download_latest.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+[![Download Latest APK](apk/download_latest.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
 ---
 
@@ -16,21 +16,21 @@ This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, e
                            │  (Menu Bar ⚫️)    │
                            │  Custom Popover  │
                            │  unified_sync.py │
-                           └────────┬─────────┘
-                                    │
-                 ┌──────────────────┼──────────────────┐
-                 │                  │                   │
-          Wireless ADB        Wi-Fi Direct       Apple Native
-        (Background Sync)     (P2P Sockets)     (AirDrop + UC)
-                 │                  │                   │
-    ┌────────────▼───────┐          │       ┌───────────▼──────────┐
-    │   Nothing Phone    │◄─────────┘       │   iPhone / iPad      │
-    │                    │                  │                      │
-    │  NothingAirShare   │                  │  No app required —   │
-    │  Companion App     │                  │  uses native AirDrop │
-    │  (APK v2.6.0)      │                  │  & Universal         │
-    │                    │                  │  Clipboard           │
-    └────────────────────┘                  └──────────────────────┘
+                           └─────────┬────────┘
+                                     │
+                 ┌───────────────────┼──────────────────┐
+                 │                   │                  │
+          Wireless ADB         Wi-Fi Direct       Apple Native
+        (Background Sync)      (P2P Sockets)     (AirDrop + UC)
+                 │                   │                  │
+    ┌────────────▼───────┐           │       ┌───────────▼──────────┐
+    │   Nothing Phone    │◄──────────┘       │   iPhone / iPad      │
+    │                    │                   │                      │
+    │  NothingAirShare   │                   │  No app required —   │
+    │  Companion App     │                   │  uses native AirDrop │
+    │  (APK v2.7.0)      │                   │  & Universal         │
+    │                    │                   │  Clipboard           │
+    └────────────────────┘                   └──────────────────────┘
 ```
 
 **Three components, one seamless loop:**
@@ -48,10 +48,10 @@ This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, e
 ### Option A — Direct Download (Recommended)
 1. Download the latest version to your phone:
 
-   [![Download Latest APK](apk/download_latest.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+   [![Download Latest APK](apk/download_latest.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
    **Previous Versions:**
-   [![v2.6.0](apk/version_v2.6.0.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.6.0/NothingAirShare.apk) &nbsp; [![v2.5.0](apk/version_v2.5.0.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.5.0/NothingAirShare.apk) &nbsp; [![v2.4.0](apk/version_v2.4.0.svg?v=2.6.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.4.0/NothingAirShare.apk)
+   [![v2.7.0](apk/version_v2.7.0.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.7.0/NothingAirShare.apk) &nbsp; [![v2.6.0](apk/version_v2.6.0.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.6.0/NothingAirShare.apk) &nbsp; [![v2.5.0](apk/version_v2.5.0.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.5.0/NothingAirShare.apk) &nbsp; [![v2.4.0](apk/version_v2.4.0.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.4.0/NothingAirShare.apk)
 
 2. Open the downloaded file on your Nothing Phone
 3. Tap **Install** (you may need to allow "Install from unknown sources" for your browser)
@@ -118,14 +118,17 @@ adb pair <IP>:<PORT>
 # Enter the 6-digit pairing code when prompted
 ```
 
-### Connecting (After Pairing)
+### Connecting & Handshake (After Pairing)
 
-1. Click the `⚫️` icon in your Mac's menu bar to open the Popover panel
-2. Click the **Connect ADB** button at the bottom
-3. Enter your phone's Wireless Debugging IP and port (shown on the Wireless Debugging screen)
-4. The dot turns solid white and the panel status updates to **Connected** along with battery percentage and phone model
-
-> **Tip:** The daemon remembers your last connection address and auto-reconnects on startup.
+With **v2.7.0**, connections are now fully automated and resilient to dynamic port changes:
+1. Make sure your Nothing Phone is paired with the Mac (see above).
+2. Toggle **Wireless Debugging** on your Nothing Phone.
+3. The macOS daemon (`unified_sync.py`) continuously listens for mDNS broadcasts from Android (`_adb-tls-connect._tcp.`). It will automatically discover your phone's randomized port and run `adb connect` in the background within seconds!
+4. The menu bar dot turns solid white, and the Popover panel updates to **Connected** along with battery level, charging status, and phone model.
+5. If automatic Bonjour discovery fails (e.g. on restricted enterprise Wi-Fi), you can still:
+   - Click the `⚫️` menu bar icon -> click **Connect ADB** at the bottom.
+   - Enter your phone's IP and port manually (shown on the phone's Wireless Debugging screen).
+   - Alternatively, toggle Wireless Debugging via the shortcut in the app settings (see below).
 
 ---
 
@@ -178,6 +181,7 @@ All received files are indexed by **Spotlight** — find them instantly with `Cm
 | **REMOTE INPUT** | Opens a full-screen trackpad — control your Mac's cursor wirelessly (Requires Accessibility permission on Mac) |
 | **MEDIA REMOTE** | Control Mac media playback (Play/Pause, Next, Previous) wirelessly |
 | **☰ Drawer** | Slide open to see discovered nearby devices, settings, and about info |
+| **⚙ Settings Overlay** | Customize options including: <br>• **Font Size Scaling**: Toggle SMALL, MEDIUM (default), or LARGE font scaling sizes globally in real-time. <br>• **⚙ Wireless Debugging Button**: Launches Android system Wireless Debugging / developer options panel. |
 
 ### 🌙 Focus Mode Sync
 Toggle **Do Not Disturb** on your Mac → your Nothing Phone's DND / Zen Mode follows automatically.

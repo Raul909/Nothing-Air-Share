@@ -53,7 +53,7 @@
                         android:layout_height="wrap_content"
                         android:text="@string/title_nothing"
                         android:textColor="@color/white"
-                        android:textSize="20sp"
+                        android:textSize="24sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/ndot55" />
 
@@ -63,7 +63,7 @@
                         android:layout_height="wrap_content"
                         android:text="@string/subtitle_airshare"
                         android:textColor="@color/nothing_red"
-                        android:textSize="12sp"
+                        android:textSize="14sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/ndot57" />
                 </LinearLayout>
@@ -119,7 +119,7 @@
                                 android:layout_height="wrap_content"
                                 android:text="@string/status_active"
                                 android:textColor="@color/white"
-                                android:textSize="16sp"
+                                android:textSize="18sp"
                                 android:textStyle="bold"
                                 android:fontFamily="@font/ndot57" />
 
@@ -136,7 +136,7 @@
                             android:layout_height="wrap_content"
                             android:text="@string/status_ready"
                             android:textColor="@color/text_secondary"
-                            android:textSize="12sp"
+                            android:textSize="14sp"
                             android:fontFamily="@font/letteramono"
                             android:layout_marginTop="4dp" />
 
@@ -186,6 +186,7 @@
                                 android:layout_weight="1" />
 
                             <TextView
+                                android:id="@+id/tvSendFilesTitle"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_send_files"
@@ -194,6 +195,7 @@
                                 android:fontFamily="@font/ndot57" />
 
                             <TextView
+                                android:id="@+id/tvSendFilesDesc"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_send_files_desc"
@@ -232,6 +234,7 @@
                                 android:layout_weight="1" />
 
                             <TextView
+                                android:id="@+id/tvClipboardTitle"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_clipboard"
@@ -240,6 +243,7 @@
                                 android:fontFamily="@font/ndot57" />
 
                             <TextView
+                                android:id="@+id/tvClipboardDesc"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_clipboard_desc"
@@ -282,6 +286,7 @@
                                 android:layout_weight="1" />
 
                             <TextView
+                                android:id="@+id/tvRemoteInputTitle"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_remote_input"
@@ -290,6 +295,7 @@
                                 android:fontFamily="@font/ndot57" />
 
                             <TextView
+                                android:id="@+id/tvRemoteInputDesc"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_remote_input_desc"
@@ -328,6 +334,7 @@
                                 android:layout_weight="1" />
 
                             <TextView
+                                android:id="@+id/tvCardMediaTitle"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_media"
@@ -336,6 +343,7 @@
                                 android:fontFamily="@font/ndot57" />
 
                             <TextView
+                                android:id="@+id/tvCardMediaDesc"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_media_desc"
@@ -788,6 +796,64 @@
                             android:background="@color/divider"
                             android:layout_marginVertical="24dp" />
 
+                        <!-- Section: Font Size -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="FONT SIZE"
+                            android:textColor="@color/nothing_red"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:fontFamily="@font/ndot57" />
+
+                        <RadioGroup
+                            android:id="@+id/rgFontSize"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:layout_marginTop="12dp">
+
+                            <RadioButton
+                                android:id="@+id/rbFontSmall"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="SMALL"
+                                android:textColor="@color/white"
+                                android:buttonTint="@color/white"
+                                android:fontFamily="@font/letteramono"
+                                android:textSize="12sp" />
+
+                            <RadioButton
+                                android:id="@+id/rbFontMedium"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="MEDIUM"
+                                android:textColor="@color/white"
+                                android:buttonTint="@color/white"
+                                android:fontFamily="@font/letteramono"
+                                android:textSize="12sp"
+                                android:checked="true" />
+
+                            <RadioButton
+                                android:id="@+id/rbFontLarge"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="LARGE"
+                                android:textColor="@color/white"
+                                android:buttonTint="@color/white"
+                                android:fontFamily="@font/letteramono"
+                                android:textSize="12sp" />
+                        </RadioGroup>
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="@color/divider"
+                            android:layout_marginVertical="24dp" />
+
                         <!-- Section: Active Plugins -->
                         <TextView
                             android:layout_width="wrap_content"
@@ -830,6 +896,35 @@
                             android:checked="true"
                             android:thumbTint="@color/white"
                             android:trackTint="@color/nothing_red_tint" />
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="@color/divider"
+                            android:layout_marginVertical="24dp" />
+
+                        <!-- Section: System Utilities -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="SYSTEM UTILITIES"
+                            android:textColor="@color/nothing_red"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:fontFamily="@font/ndot57" />
+
+                        <Button
+                            android:id="@+id/btnWirelessDebugging"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:background="@drawable/btn_dark"
+                            app:backgroundTint="#1A1A1A"
+                            android:text="⚙ WIRELESS DEBUGGING"
+                            android:textColor="@color/white"
+                            android:textSize="14sp"
+                            android:fontFamily="@font/ndot57"
+                            android:layout_marginTop="12dp"
+                            android:layout_gravity="center_horizontal" />
 
                         <Space
                             android:layout_width="match_parent"
@@ -928,7 +1023,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="v2.6.0"
+                            android:text="v2.7.0"
                             android:textColor="@color/text_secondary"
                             android:textSize="14sp"
                             android:fontFamily="@font/letteramono"
@@ -998,6 +1093,7 @@
             android:paddingBottom="24dp">
 
             <TextView
+                android:id="@+id/tvDrawerTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/title_nothing"
@@ -1007,6 +1103,7 @@
                 android:fontFamily="@font/ndot55" />
 
             <TextView
+                android:id="@+id/tvDrawerSubtitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/subtitle_airshare"
@@ -1111,7 +1208,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="v2.5.0"
+            android:text="v2.7.0"
             android:textColor="@color/text_muted"
             android:textSize="10sp"
             android:fontFamily="@font/letteramono"

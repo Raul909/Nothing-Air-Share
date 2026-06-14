@@ -77,6 +77,15 @@ def load_config():
 # Track last pulled file for AirDrop forwarding
 LAST_PULLED_FILE = None
 
+def resolve_mdns_hostname(hostname):
+    try:
+        if hostname.endswith('.'):
+            hostname = hostname[:-1]
+        return socket.gethostbyname(hostname)
+    except Exception as e:
+        print(f"[Bonjour] Failed to resolve hostname '{hostname}' via socket: {e}")
+        return hostname
+
 # Bonjour Manager and P2P File Sharing Support
 class BonjourManager(NSObject):
     def init(self):
@@ -84,7 +93,9 @@ class BonjourManager(NSObject):
         if self:
             self.discovered_devices = {}  # name -> (host, port)
             self.browser = None
+            self.adb_browser = None
             self.service = None
+            self.services_resolving = []
         return self
 
     def start(self):
@@ -102,12 +113,20 @@ class BonjourManager(NSObject):
         self.browser = NSNetServiceBrowser.alloc().init()
         self.browser.setDelegate_(self)
         self.browser.searchForServicesOfType_inDomain_("_nothing-share._tcp.", "local.")
-        print("[Bonjour] Started advertising as 'Mac Nothing Share' and browsing for services...")
+
+        # 3. Browse for Android Wireless Debugging
+        self.adb_browser = NSNetServiceBrowser.alloc().init()
+        self.adb_browser.setDelegate_(self)
+        self.adb_browser.searchForServicesOfType_inDomain_("_adb-tls-connect._tcp.", "local.")
+        print("[Bonjour] Started advertising, browsing for nothing-share and adb-tls-connect...")
 
     # NSNetServiceBrowser delegate methods
     def netServiceBrowser_didFindService_moreComing_(self, browser, service, more):
-        print(f"[Bonjour] Found service: {service.name()}")
+        print(f"[Bonjour] Found service: {service.name()} ({service.type()})")
         service.setDelegate_(self)
+        if not hasattr(self, "services_resolving") or self.services_resolving is None:
+            self.services_resolving = []
+        self.services_resolving.append(service)
         service.resolveWithTimeout_(5.0)
 
     def netServiceBrowser_didRemoveService_moreComing_(self, browser, service, more):
@@ -122,16 +141,35 @@ class BonjourManager(NSObject):
     def netServiceDidResolveAddress_(self, service):
         host = service.hostName()
         port = service.port()
-        self.discovered_devices[service.name()] = (host, port)
-        print(f"[Bonjour] Resolved {service.name()} to {host}:{port}")
-        if app_delegate:
-            app_delegate.update_menu()
+        stype = service.type()
+        print(f"[Bonjour] Resolved {service.name()} ({stype}) to {host}:{port}")
+        
+        if hasattr(self, "services_resolving") and service in self.services_resolving:
+            try:
+                self.services_resolving.remove(service)
+            except:
+                pass
+
+        if "_adb-tls-connect" in stype:
+            ip = resolve_mdns_hostname(host)
+            addr = f"{ip}:{port}"
+            print(f"[Bonjour ADB] Discovered Wireless Debugging at {addr}. Dynamic connect...")
+            threading.Thread(target=run_adb_connect, args=(addr,), daemon=True).start()
+        else:
+            self.discovered_devices[service.name()] = (host, port)
+            if app_delegate:
+                app_delegate.update_menu()
 
     def netService_didNotPublish_(self, service, errorDict):
         print(f"[Bonjour Error] Publishing failed: {errorDict}")
 
     def netService_didNotResolve_(self, service, errorDict):
-        print(f"[Bonjour Error] Resolution failed: {errorDict}")
+        print(f"[Bonjour Error] Resolution failed for {service.name()}: {errorDict}")
+        if hasattr(self, "services_resolving") and service in self.services_resolving:
+            try:
+                self.services_resolving.remove(service)
+            except:
+                pass
 
 
 def mac_tcp_server_loop():
@@ -604,7 +642,13 @@ def get_macos_focus_state():
 
 def run_adb_connect(address):
     print(f"[ADB] Attempting connection to: {address}")
-    subprocess.run(["adb", "connect", address], capture_output=True)
+    res = subprocess.run(["adb", "connect", address], capture_output=True, text=True)
+    out = res.stdout.strip()
+    print(f"[ADB] Result: {out}")
+    if "connected to" in out or "already connected to" in out:
+        config = load_config()
+        config["last_address"] = address
+        save_config(config)
 
 # Threads for operations
 def status_polling_loop():
@@ -1029,7 +1073,7 @@ class NothingPopoverViewController(NSViewController):
         title_label.setFrame_(((32, 10), (200, 20)))
         header_bg.addSubview_(title_label)
         
-        version_label = NSTextField.labelWithString_("v2.6.0")
+        version_label = NSTextField.labelWithString_("v2.7.0")
         version_label.setFont_(NSFont.systemFontOfSize_(10))
         version_label.setTextColor_(NSColor.grayColor())
         version_label.setFrame_(((300, 10), (44, 20)))

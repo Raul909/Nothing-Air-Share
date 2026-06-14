@@ -18,6 +18,13 @@ captures/
 *.apk
 !apk/*.apk
 
+# Keys and credentials
+*.keystore
+*.jks
+secrets.properties
+signing.properties
+
+
 # Agent & IDE configs
 .claude/
 .gemini/

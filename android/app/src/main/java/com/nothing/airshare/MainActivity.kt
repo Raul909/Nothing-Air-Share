@@ -162,6 +162,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         val savedClipboardSync = prefs.getBoolean("pref_clipboard_sync", true)
         val savedFindPhone = prefs.getBoolean("pref_find_phone", true)
         val savedRemoteInput = prefs.getBoolean("pref_remote_input", true)
+        val savedFontSize = prefs.getString("pref_font_size", "medium") ?: "medium"
         
         binding.etMacIp.setText(savedMacIp)
         binding.etMacPort.setText(savedMacPort.toString())
@@ -169,6 +170,13 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         binding.switchClipboardSync.isChecked = savedClipboardSync
         binding.switchFindPhone.isChecked = savedFindPhone
         binding.switchRemoteInput.isChecked = savedRemoteInput
+
+        when (savedFontSize) {
+            "small" -> binding.rbFontSmall.isChecked = true
+            "large" -> binding.rbFontLarge.isChecked = true
+            else -> binding.rbFontMedium.isChecked = true
+        }
+        applyFontSettings()
 
         // Drawer click handlers
         binding.drawerSettings.setOnClickListener {
@@ -197,6 +205,12 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
             val findPhone = binding.switchFindPhone.isChecked
             val remoteInput = binding.switchRemoteInput.isChecked
 
+            val fontSize = when (binding.rgFontSize.checkedRadioButtonId) {
+                R.id.rbFontSmall -> "small"
+                R.id.rbFontLarge -> "large"
+                else -> "medium"
+            }
+
             prefs.edit().apply {
                 putString("mac_ip", macIp)
                 putInt("mac_port", macPort)
@@ -204,8 +218,10 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
                 putBoolean("pref_clipboard_sync", clipboardSync)
                 putBoolean("pref_find_phone", findPhone)
                 putBoolean("pref_remote_input", remoteInput)
+                putString("pref_font_size", fontSize)
                 apply()
             }
+            applyFontSettings()
 
             // Update local server port and restart server if local port changed
             if (FileTransferService.port != localPort) {
@@ -298,6 +314,20 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         }
         binding.btnNext.setOnClickListener {
             Toast.makeText(this, "Next track: awaiting Mac connection", Toast.LENGTH_SHORT).show()
+        }
+
+        // --- System Utilities (Wireless Debugging) ---
+        binding.btnWirelessDebugging.setOnClickListener {
+            try {
+                startActivity(Intent("android.settings.WIFI_ADB_SETTINGS"))
+            } catch (e: Exception) {
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                    Toast.makeText(this, "Wireless Debugging settings not found. Opening Developer Options.", Toast.LENGTH_LONG).show()
+                } catch (ex: Exception) {
+                    Toast.makeText(this, "Failed to open developer settings: ${ex.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
@@ -524,6 +554,38 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         } else {
             binding.tvStatus.text = "Clipboard Empty"
         }
+    }
+
+    private fun applyFontSettings() {
+        val prefs = getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
+        val fontSize = prefs.getString("pref_font_size", "medium") ?: "medium"
+        val scale = when (fontSize) {
+            "small" -> 0.85f
+            "large" -> 1.20f
+            else -> 1.00f
+        }
+
+        binding.tvTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 24f * scale)
+        binding.tvSubtitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
+        binding.tvStatusLabel.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 18f * scale)
+        binding.tvStatus.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
+
+        binding.tvSendFilesTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
+        binding.tvSendFilesDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 9f * scale)
+        binding.tvClipboardTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
+        binding.tvClipboardDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 9f * scale)
+        binding.tvRemoteInputTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
+        binding.tvRemoteInputDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 9f * scale)
+        binding.tvCardMediaTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
+        binding.tvCardMediaDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 9f * scale)
+
+        binding.tvDrawerTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 28f * scale)
+        binding.tvDrawerSubtitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
+        binding.tvDeviceName.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f * scale)
+        binding.tvDevicesHeader.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f * scale)
+        binding.tvNoDevices.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
+        binding.drawerSettings.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
+        binding.drawerAbout.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
     }
 
     override fun onDestroy() {
