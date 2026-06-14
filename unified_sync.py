@@ -13,12 +13,20 @@ from AppKit import (
     NSVariableStatusItemLength, NSWorkspace,
     NSPasteboard, NSStringPboardType, NSFilenamesPboardType,
     NSTIFFPboardType, NSImage, NSBitmapImageRep, NSPNGFileType,
-    NSSharingService, NSSharingServiceNameSendViaAirDrop
+    NSSharingService, NSSharingServiceNameSendViaAirDrop,
+    NSPopover, NSViewController, NSView, NSTextField, NSColor,
+    NSFont, NSButton, NSBezelStyleRounded, NSVisualEffectView,
+    NSAppearance, NSProgressIndicator, NSTrackingArea,
+    NSRectFill, NSBezierPath, NSAlert, NSPopUpButton,
+    NSImageLeft, NSPopoverBehaviorTransient, NSMinYEdge,
+    NSMutableAttributedString, NSForegroundColorAttributeName,
+    NSFontAttributeName
 )
 from Foundation import NSObject, NSURL, NSNetService, NSNetServiceBrowser
 import objc
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from ApplicationServices import AXIsProcessTrusted, AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
 
 # Ensure Homebrew and common directories are in PATH for subprocess calls
 for p in ["/opt/homebrew/bin", "/usr/local/bin"]:
@@ -721,6 +729,11 @@ done
                 continue
             
             if app_delegate:
+                try:
+                    model_res = subprocess.run(["adb", "shell", "getprop ro.product.model"], capture_output=True, text=True, timeout=3)
+                    app_delegate.device_model = model_res.stdout.strip() if (model_res.returncode == 0 and model_res.stdout.strip()) else "Nothing Phone"
+                except:
+                    app_delegate.device_model = "Nothing Phone"
                 app_delegate.set_connected(True)
                 
             # Dynamically detect installed helper package
@@ -791,6 +804,509 @@ done
                 app_delegate.set_connected(False)
         time.sleep(3)
 
+# Helper to create styled template images for status bar
+def create_template_dot(filled=True):
+    img = NSImage.alloc().initWithSize_((16, 16))
+    img.setTemplate_(True)
+    img.lockFocus()
+    NSColor.blackColor().set()
+    if filled:
+        path = NSBezierPath.bezierPathWithOvalInRect_(((4, 4), (8, 8)))
+        path.fill()
+    else:
+        path = NSBezierPath.bezierPathWithOvalInRect_(((4, 4), (8, 8)))
+        path.setLineWidth_(1.5)
+        path.stroke()
+    img.unlockFocus()
+    return img
+
+def get_current_mac_clipboard_text():
+    pb = NSPasteboard.generalPasteboard()
+    content = pb.stringForType_(NSStringPboardType)
+    return content if content else ""
+
+def push_file_to_android(local_path):
+    filename = os.path.basename(local_path)
+    remote_path = f"{DROP_ZONE_ANDROID}/{filename}"
+    try:
+        subprocess.run(["adb", "shell", f"mkdir -p {DROP_ZONE_ANDROID}"], check=True, capture_output=True)
+        res = subprocess.run(["adb", "push", local_path, remote_path], check=True, capture_output=True)
+        if res.returncode == 0:
+            print(f"[Sync] Pushed to Phone: {filename}")
+            send_android_notification("Nothing Drop", f"Received: {filename}")
+            send_mac_notification("Nothing AirShare", f"Successfully sent {filename} to phone.")
+    except Exception as e:
+        print(f"[Error] Failed to push {filename}: {e}")
+        send_mac_notification("Nothing AirShare Error", f"Failed to push {filename}: {e}")
+
+def trigger_phone_ring():
+    print("[Find My Phone] Triggering phone alarm...")
+    res = subprocess.run(["adb", "shell", "am", "broadcast", "-a", "clipper.ring"], capture_output=True, text=True)
+    if res.returncode == 0:
+        print("[Find My Phone] Broadcast sent successfully.")
+    else:
+        print(f"[Find My Phone] Error sending broadcast: {res.stderr}")
+
+def run_local_command(cmd_id):
+    commands_dict = {
+        "lock_screen": "pmset displaysleepnow",
+        "screenshot": "screencapture -i ~/Desktop/screenshot_$(date +%Y%m%d_%H%M%S).png",
+        "open_terminal": "open -a Terminal",
+        "toggle_dark_mode": "osascript -e 'tell app \"System Events\" to tell appearance preferences to set dark mode to not dark mode'",
+        "sleep": "pmset sleepnow"
+    }
+    cmd = commands_dict.get(cmd_id)
+    if cmd:
+        print(f"[Command] Running: {cmd}")
+        subprocess.Popen(cmd, shell=True)
+        send_mac_notification("Command Executed", f"Ran command: {cmd_id.replace('_', ' ').title()}")
+
+def show_info_alert(title, text):
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_(title)
+    alert.setInformativeText_(text)
+    alert.addButtonWithTitle_("OK")
+    alert.runModal()
+
+def show_accessibility_alert():
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("Accessibility Permission Required")
+    alert.setInformativeText_(
+        "Remote Input features require Accessibility permission to simulate mouse and keyboard events on this Mac.\n\n"
+        "Click 'Grant' to open System Settings, then enable Python in the Accessibility list."
+    )
+    alert.addButtonWithTitle_("Grant Permission")
+    alert.addButtonWithTitle_("Later")
+    if alert.runModal() == 1000:
+        # Prompt OS dialog
+        AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+        # Open settings directly
+        workspace = NSWorkspace.sharedWorkspace()
+        url = NSURL.URLWithString_("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        workspace.openURL_(url)
+
+def show_commands_alert(popover_vc):
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("Run Command on Mac")
+    alert.setInformativeText_("Select a predefined command to run on this Mac:")
+    
+    popup = NSPopUpButton.alloc().initWithFrame_(((0, 0), (240, 24)), pullsDown=False)
+    commands = [
+        ("Lock Screen", "lock_screen"),
+        ("Toggle Dark Mode", "toggle_dark_mode"),
+        ("Open Terminal", "open_terminal"),
+        ("Take Screenshot", "screenshot"),
+        ("Put Mac to Sleep", "sleep")
+    ]
+    for label, cmd_id in commands:
+        popup.addItemWithTitle_(label)
+        
+    alert.setAccessoryView_(popup)
+    alert.addButtonWithTitle_("Run")
+    alert.addButtonWithTitle_("Cancel")
+    
+    if alert.runModal() == 1000:
+        selected_index = popup.indexOfSelectedItem()
+        if 0 <= selected_index < len(commands):
+            cmd_label, cmd_id = commands[selected_index]
+            run_local_command(cmd_id)
+
+class CardView(NSView):
+    def initWithFrame_icon_title_action_(self, frame, icon, title, action):
+        self = objc.super(CardView, self).initWithFrame_(frame)
+        if self:
+            self.icon = icon
+            self.title = title
+            self.action = action
+            self.hovered = False
+            self.tracking_area = None
+            self.setup_ui()
+        return self
+
+    def setup_ui(self):
+        self.icon_label = NSTextField.labelWithString_(self.icon)
+        self.icon_label.setFont_(NSFont.systemFontOfSize_(24))
+        self.icon_label.setFrame_(((0, self.frame().size.height - 45), (self.frame().size.width, 30)))
+        self.icon_label.setAlignment_(1) # NSTextAlignmentCenter
+        self.icon_label.setTextColor_(NSColor.whiteColor())
+        self.icon_label.setEditable_(False)
+        self.icon_label.setSelectable_(False)
+        self.icon_label.setDrawsBackground_(False)
+        self.icon_label.setBezeled_(False)
+        self.addSubview_(self.icon_label)
+
+        self.title_label = NSTextField.labelWithString_(self.title)
+        self.title_label.setFont_(NSFont.boldSystemFontOfSize_(11))
+        self.title_label.setFrame_(((0, 10), (self.frame().size.width, 20)))
+        self.title_label.setAlignment_(1) # NSTextAlignmentCenter
+        self.title_label.setTextColor_(NSColor.whiteColor())
+        self.title_label.setEditable_(False)
+        self.title_label.setSelectable_(False)
+        self.title_label.setDrawsBackground_(False)
+        self.title_label.setBezeled_(False)
+        self.addSubview_(self.title_label)
+
+    def drawRect_(self, rect):
+        bounds = self.bounds()
+        bg_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.08, 0.08, 0.08, 1.0)
+        bg_color.setFill()
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(bounds, 12, 12)
+        path.fill()
+        
+        # Border
+        if self.hovered:
+            border_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(211/255.0, 47/255.0, 47/255.0, 1.0)
+            path.setLineWidth_(2.0)
+        else:
+            border_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.2, 0.2, 0.2, 1.0)
+            path.setLineWidth_(1.0)
+            
+        border_color.setStroke()
+        path.stroke()
+
+    def updateTrackingAreas(self):
+        if self.tracking_area:
+            self.removeTrackingArea_(self.tracking_area)
+        options = 0x01 | 0x10 | 0x20
+        self.tracking_area = NSTrackingArea.alloc().initWithRect_options_owner_userInfo_(
+            self.bounds(),
+            options,
+            self,
+            None
+        )
+        self.addTrackingArea_(self.tracking_area)
+        objc.super(CardView, self).updateTrackingAreas()
+
+    def mouseEntered_(self, event):
+        self.hovered = True
+        self.setNeedsDisplay_(True)
+
+    def mouseExited_(self, event):
+        self.hovered = False
+        self.setNeedsDisplay_(True)
+
+    def mouseDown_(self, event):
+        if self.action:
+            self.action()
+
+class NothingPopoverViewController(NSViewController):
+    def init(self):
+        self = objc.super(NothingPopoverViewController, self).init()
+        if self:
+            self.app_delegate = None
+            self.button_device_map = {}
+            self.button_history_map = {}
+        return self
+
+    def loadView(self):
+        self.main_effect_view = NSVisualEffectView.alloc().initWithFrame_(((0, 0), (360, 600)))
+        self.main_effect_view.setMaterial_(4)
+        self.main_effect_view.setBlendingMode_(0)
+        self.main_effect_view.setState_(1)
+        self.main_effect_view.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
+        
+        self.content_view = NSView.alloc().initWithFrame_(((0, 0), (360, 600)))
+        self.main_effect_view.addSubview_(self.content_view)
+        self.setView_(self.main_effect_view)
+        
+        self.setup_ui()
+
+    def setup_ui(self):
+        # Header
+        header_bg = NSView.alloc().initWithFrame_(((0, 560), (360, 40)))
+        header_bg.setWantsLayer_(True)
+        header_bg.layer().setBackgroundColor_(NSColor.blackColor().CGColor())
+        
+        dot_label = NSTextField.labelWithString_("●")
+        dot_label.setFont_(NSFont.boldSystemFontOfSize_(14))
+        dot_label.setTextColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(211/255.0, 47/255.0, 47/255.0, 1.0))
+        dot_label.setFrame_(((16, 10), (15, 20)))
+        header_bg.addSubview_(dot_label)
+        
+        title_label = NSTextField.labelWithString_("NOTHING AIRSHARE")
+        title_label.setFont_(NSFont.boldSystemFontOfSize_(13))
+        title_label.setTextColor_(NSColor.whiteColor())
+        title_label.setFrame_(((32, 10), (200, 20)))
+        header_bg.addSubview_(title_label)
+        
+        version_label = NSTextField.labelWithString_("v2.5.0")
+        version_label.setFont_(NSFont.systemFontOfSize_(10))
+        version_label.setTextColor_(NSColor.grayColor())
+        version_label.setFrame_(((300, 10), (44, 20)))
+        version_label.setAlignment_(2)
+        header_bg.addSubview_(version_label)
+        
+        self.content_view.addSubview_(header_bg)
+        
+        # Status Card
+        self.status_card = NSView.alloc().initWithFrame_(((16, 475), (328, 70)))
+        self.status_card.setWantsLayer_(True)
+        self.status_card.layer().setCornerRadius_(12)
+        self.status_card.layer().setBackgroundColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(0.08, 0.08, 0.08, 1.0).CGColor())
+        self.status_card.layer().setBorderWidth_(1)
+        self.status_card.layer().setBorderColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(0.2, 0.2, 0.2, 1.0).CGColor())
+        
+        self.status_dot = NSTextField.labelWithString_("●")
+        self.status_dot.setFont_(NSFont.boldSystemFontOfSize_(12))
+        self.status_dot.setFrame_(((16, 40), (15, 20)))
+        self.status_card.addSubview_(self.status_dot)
+        
+        self.status_title = NSTextField.labelWithString_("Searching...")
+        self.status_title.setFont_(NSFont.boldSystemFontOfSize_(12))
+        self.status_title.setTextColor_(NSColor.whiteColor())
+        self.status_title.setFrame_(((32, 40), (200, 20)))
+        self.status_card.addSubview_(self.status_title)
+        
+        self.status_subtitle = NSTextField.labelWithString_("Please connect wireless ADB or check Bonjour")
+        self.status_subtitle.setFont_(NSFont.systemFontOfSize_(10))
+        self.status_subtitle.setTextColor_(NSColor.grayColor())
+        self.status_subtitle.setFrame_(((16, 15), (296, 20)))
+        self.status_card.addSubview_(self.status_subtitle)
+        
+        self.content_view.addSubview_(self.status_card)
+        
+        # Action Cards Grid
+        self.card_clipboard = CardView.alloc().initWithFrame_icon_title_action_(
+            ((16, 385), (100, 75)), "📋", "Clipboard", self.action_clipboard
+        )
+        self.card_send = CardView.alloc().initWithFrame_icon_title_action_(
+            ((130, 385), (100, 75)), "📁", "Send Files", self.action_send_files
+        )
+        self.card_remote = CardView.alloc().initWithFrame_icon_title_action_(
+            ((244, 385), (100, 75)), "🖱️", "Remote Input", self.action_remote_input
+        )
+        
+        self.card_media = CardView.alloc().initWithFrame_icon_title_action_(
+            ((16, 300), (100, 75)), "🎵", "Media", self.action_media
+        )
+        self.card_find = CardView.alloc().initWithFrame_icon_title_action_(
+            ((130, 300), (100, 75)), "📱", "Find Phone", self.action_find_phone
+        )
+        self.card_commands = CardView.alloc().initWithFrame_icon_title_action_(
+            ((244, 300), (100, 75)), "⚙️", "Commands", self.action_commands
+        )
+        
+        self.content_view.addSubview_(self.card_clipboard)
+        self.content_view.addSubview_(self.card_send)
+        self.content_view.addSubview_(self.card_remote)
+        self.content_view.addSubview_(self.card_media)
+        self.content_view.addSubview_(self.card_find)
+        self.content_view.addSubview_(self.card_commands)
+        
+        # Nearby Devices Section
+        self.devices_section_title = NSTextField.labelWithString_("─── NEARBY DEVICES ───")
+        self.devices_section_title.setFont_(NSFont.boldSystemFontOfSize_(9))
+        self.devices_section_title.setTextColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(211/255.0, 47/255.0, 47/255.0, 1.0))
+        self.devices_section_title.setFrame_(((16, 265), (328, 15)))
+        self.content_view.addSubview_(self.devices_section_title)
+        
+        self.devices_container = NSView.alloc().initWithFrame_(((16, 205), (328, 55)))
+        self.content_view.addSubview_(self.devices_container)
+        
+        # Clipboard History Section
+        self.clipboard_section_title = NSTextField.labelWithString_("─── CLIPBOARD HISTORY ───")
+        self.clipboard_section_title.setFont_(NSFont.boldSystemFontOfSize_(9))
+        self.clipboard_section_title.setTextColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(211/255.0, 47/255.0, 47/255.0, 1.0))
+        self.clipboard_section_title.setFrame_(((16, 180), (328, 15)))
+        self.content_view.addSubview_(self.clipboard_section_title)
+        
+        self.clipboard_container = NSView.alloc().initWithFrame_(((16, 95), (328, 80)))
+        self.content_view.addSubview_(self.clipboard_container)
+        
+        # Bottom Action Buttons
+        self.btn_open_folder = NSButton.alloc().initWithFrame_(((16, 50), (158, 32)))
+        self.btn_open_folder.setTitle_("Open NothingDrop")
+        self.btn_open_folder.setBezelStyle_(NSBezelStyleRounded)
+        self.btn_open_folder.setTarget_(self)
+        self.btn_open_folder.setAction_("openFolderClicked:")
+        self.content_view.addSubview_(self.btn_open_folder)
+        
+        self.btn_connect_adb = NSButton.alloc().initWithFrame_(((186, 50), (158, 32)))
+        self.btn_connect_adb.setTitle_("Connect ADB")
+        self.btn_connect_adb.setBezelStyle_(NSBezelStyleRounded)
+        self.btn_connect_adb.setTarget_(self)
+        self.btn_connect_adb.setAction_("connectAdbClicked:")
+        self.content_view.addSubview_(self.btn_connect_adb)
+        
+        # Quit Button
+        self.btn_quit = NSButton.alloc().initWithFrame_(((16, 12), (328, 32)))
+        self.btn_quit.setTitle_("Quit Nothing Sync")
+        self.btn_quit.setBezelStyle_(NSBezelStyleRounded)
+        self.btn_quit.setTarget_(self)
+        self.btn_quit.setAction_("quitClicked:")
+        self.content_view.addSubview_(self.btn_quit)
+        
+        self.refresh_data()
+
+    def refresh_data(self):
+        # Update Status Card
+        if self.app_delegate and self.app_delegate.connected:
+            self.status_dot.setTextColor_(NSColor.greenColor())
+            self.status_title.setStringValue_("Connected")
+            
+            battery = self.app_delegate.battery_level
+            charging_str = " (Charging)" if self.app_delegate.charging else ""
+            device_model = getattr(self.app_delegate, "device_model", "Nothing Phone")
+            self.status_subtitle.setStringValue_(f"{device_model}  ·  Battery {battery}%{charging_str}")
+        else:
+            self.status_dot.setTextColor_(NSColor.redColor())
+            self.status_title.setStringValue_("Searching...")
+            self.status_subtitle.setStringValue_("Please connect wireless ADB or check Bonjour")
+            
+        # Update Nearby Devices
+        for subview in list(self.devices_container.subviews()):
+            subview.removeFromSuperview()
+            
+        y_offset = 35
+        devices = []
+        if bonjour_manager and bonjour_manager.discovered_devices:
+            for name in bonjour_manager.discovered_devices:
+                devices.append(name)
+                
+        if not devices:
+            lbl = NSTextField.labelWithString_("No nearby sharing devices found")
+            lbl.setFont_(NSFont.systemFontOfSize_(11))
+            lbl.setTextColor_(NSColor.grayColor())
+            lbl.setFrame_(((0, y_offset), (328, 18)))
+            self.devices_container.addSubview_(lbl)
+        else:
+            for name in devices[:2]:
+                row_view = NSView.alloc().initWithFrame_(((0, y_offset), (328, 20)))
+                device_lbl = NSTextField.labelWithString_(f"📱 {name}")
+                device_lbl.setFont_(NSFont.systemFontOfSize_(12))
+                device_lbl.setTextColor_(NSColor.whiteColor())
+                device_lbl.setFrame_(((0, 0), (200, 20)))
+                row_view.addSubview_(device_lbl)
+                
+                btn = NSButton.alloc().initWithFrame_(((240, -4), (88, 24)))
+                btn.setTitle_("Send File")
+                btn.setBezelStyle_(NSBezelStyleRounded)
+                btn.setTarget_(self)
+                btn.setAction_("sendToNearbyDevice:")
+                self.button_device_map[btn] = name
+                row_view.addSubview_(btn)
+                
+                self.devices_container.addSubview_(row_view)
+                y_offset -= 22
+                
+        # Update Clipboard History
+        for subview in list(self.clipboard_container.subviews()):
+            subview.removeFromSuperview()
+            
+        y_offset = 60
+        history = db.get_history() if db else []
+        if not history:
+            lbl = NSTextField.labelWithString_("Clipboard history is empty")
+            lbl.setFont_(NSFont.systemFontOfSize_(11))
+            lbl.setTextColor_(NSColor.grayColor())
+            lbl.setFrame_(((0, y_offset), (328, 18)))
+            self.clipboard_container.addSubview_(lbl)
+        else:
+            for text in history[:3]:
+                display_text = text.replace('\n', ' ')
+                if len(display_text) > 42:
+                    display_text = display_text[:39] + "..."
+                    
+                row_btn = NSButton.alloc().initWithFrame_(((0, y_offset), (328, 20)))
+                row_btn.setButtonType_(0)
+                row_btn.setBezelStyle_(1)
+                row_btn.setBordered_(False)
+                row_btn.setTitle_(f"● {display_text}")
+                row_btn.setFont_(NSFont.systemFontOfSize_(11))
+                row_btn.setAlignment_(0)
+                
+                attr_title = NSMutableAttributedString.alloc().initWithString_attributes_(
+                    f"● {display_text}",
+                    {
+                        NSForegroundColorAttributeName: NSColor.lightGrayColor(),
+                        NSFontAttributeName: NSFont.systemFontOfSize_(11)
+                    }
+                )
+                row_btn.setAttributedTitle_(attr_title)
+                
+                row_btn.setTarget_(self)
+                row_btn.setAction_("historyItemClicked:")
+                self.button_history_map[row_btn] = text
+                
+                self.clipboard_container.addSubview_(row_btn)
+                y_offset -= 22
+
+    def historyItemClicked_(self, sender):
+        text = self.button_history_map.get(sender)
+        if text:
+            set_mac_clipboard("text", text)
+            send_mac_notification("Clipboard Restored", f"Restored: {text[:30]}")
+            self.refresh_data()
+            if self.app_delegate and self.app_delegate.connected:
+                threading.Thread(target=push_to_android_clipboard, args=({"type": "text", "data": text},), daemon=True).start()
+
+    def sendToNearbyDevice_(self, sender):
+        device_name = self.button_device_map.get(sender)
+        if device_name and self.app_delegate:
+            fake_sender = NSObject.alloc().init()
+            fake_sender.representedObject = lambda: device_name
+            self.app_delegate.sendFileToDevice_(fake_sender)
+
+    def openFolderClicked_(self, sender):
+        if self.app_delegate:
+            self.app_delegate.openNothingDrop_(sender)
+
+    def connectAdbClicked_(self, sender):
+        if self.app_delegate:
+            self.app_delegate.connectADB_(sender)
+
+    def quitClicked_(self, sender):
+        if self.app_delegate:
+            self.app_delegate.quitApp_(sender)
+
+    def action_clipboard(self):
+        clip_text = get_current_mac_clipboard_text()
+        if clip_text:
+            send_mac_notification("Nothing Clipboard", "Syncing clipboard to phone...")
+            threading.Thread(target=push_to_android_clipboard, args=({"type": "text", "data": clip_text},), daemon=True).start()
+        else:
+            send_mac_notification("Nothing Clipboard", "Mac clipboard is empty.")
+
+    def action_send_files(self):
+        if self.app_delegate and self.app_delegate.connected:
+            from AppKit import NSOpenPanel
+            panel = NSOpenPanel.openPanel()
+            panel.setCanChooseFiles_(True)
+            panel.setCanChooseDirectories_(False)
+            panel.setAllowsMultipleSelection_(False)
+            if panel.runModal() == 1:
+                file_path = panel.URL().path()
+                if file_path:
+                    send_mac_notification("Nothing AirShare", f"Sending {os.path.basename(file_path)}...")
+                    threading.Thread(target=push_file_to_android, args=(file_path,), daemon=True).start()
+        else:
+            send_mac_notification("Nothing AirShare", "No connected phone. Connect via ADB first.")
+
+    def action_remote_input(self):
+        if AXIsProcessTrusted():
+            show_info_alert(
+                "Remote Input Active",
+                "Accessibility permission is granted. To control this Mac, open 'Nothing AirShare' on your Nothing Phone, tap 'Remote Input' and use the trackpad surface."
+            )
+        else:
+            show_accessibility_alert()
+
+    def action_media(self):
+        show_info_alert(
+            "Media Control",
+            "To control media/volume on this Mac, open 'Nothing AirShare' on your Nothing Phone, tap 'Media Remote' and use the play, pause, next, and previous buttons."
+        )
+
+    def action_find_phone(self):
+        if self.app_delegate and self.app_delegate.connected:
+            send_mac_notification("Nothing Phone", "Triggering alarm on your Nothing Phone...")
+            threading.Thread(target=trigger_phone_ring, daemon=True).start()
+        else:
+            send_mac_notification("Nothing AirShare", "Phone not connected. Cannot find phone.")
+
+    def action_commands(self):
+        show_commands_alert(self)
+
 # App startup logic
 class ApplicationBootstrap(NSObject):
     def applicationDidFinishLaunching_(self, notification):
@@ -808,12 +1324,24 @@ class ApplicationBootstrap(NSObject):
         
         # Setup Status Bar
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
-        self.status_item.button().setTitle_("⚫️")
+        self.status_item.button().setAction_("statusItemClicked:")
+        self.status_item.button().setTarget_(self)
+        self.status_item.button().setImage_(create_template_dot(filled=False))
+        self.status_item.button().setImagePosition_(2) # NSImageLeft
         
         app_delegate = self
         self.connected = False
         self.battery_level = "--"
         self.charging = False
+        self.device_model = "Nothing Phone"
+        
+        # Create Popover and Popover ViewController
+        self.popover = NSPopover.alloc().init()
+        self.popover.setBehavior_(1) # NSPopoverBehaviorTransient
+        
+        self.popover_vc = NothingPopoverViewController.alloc().init()
+        self.popover_vc.app_delegate = self
+        self.popover.setContentViewController_(self.popover_vc)
         
         # Build default menu UI
         self.updateUIOnMainThread()
@@ -845,105 +1373,32 @@ class ApplicationBootstrap(NSObject):
             "updateUIOnMainThread", None, False
         )
 
+    def statusItemClicked_(self, sender):
+        button = self.status_item.button()
+        if self.popover.isShown():
+            self.popover.performClose_(sender)
+        else:
+            self.popover_vc.refresh_data()
+            self.popover.showRelativeToRect_ofView_preferredEdge_(
+                button.bounds(),
+                button,
+                1 # NSMinYEdge
+            )
+            self.popover.contentViewController().view().window().makeKeyWindow()
+
     def updateUIOnMainThread(self):
         if self.connected:
-            icon = "⚪️"
             battery_str = f" {self.battery_level}%"
             if self.charging:
                 battery_str += " ⚡️"
-            self.status_item.button().setTitle_(f"{icon}{battery_str}")
+            self.status_item.button().setTitle_(battery_str)
+            self.status_item.button().setImage_(create_template_dot(filled=True))
         else:
-            self.status_item.button().setTitle_("⚫️")
-
-        menu = NSMenu.alloc().init()
-
-        status_text = f"Nothing Phone: {'Connected' if self.connected else 'Searching...'}"
-        status_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(status_text, None, "")
-        status_item.setEnabled_(False)
-        menu.addItem_(status_item)
-
-        if self.connected:
-            battery_text = f"Battery: {self.battery_level}% {'(Charging)' if self.charging else ''}"
-            battery_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(battery_text, None, "")
-            battery_item.setEnabled_(False)
-            menu.addItem_(battery_item)
-
-        menu.addItem_(NSMenuItem.separatorItem())
-
-        history_menu = NSMenu.alloc().init()
-        self.history = db.get_history()
-        if not self.history:
-            empty_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("History empty", None, "")
-            empty_item.setEnabled_(False)
-            history_menu.addItem_(empty_item)
-        else:
-            for text in self.history:
-                display_text = text.replace('\n', ' ')
-                display_text = display_text if len(display_text) < 30 else f"{display_text[:27]}..."
-                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                    display_text, "restoreClipboard:", ""
-                )
-                item.setRepresentedObject_(text)
-                history_menu.addItem_(item)
-
-        history_parent = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Clipboard History", None, "")
-        history_parent.setSubmenu_(history_menu)
-        menu.addItem_(history_parent)
-
-        menu.addItem_(NSMenuItem.separatorItem())
-
-        global LAST_PULLED_FILE
-        if LAST_PULLED_FILE and os.path.exists(LAST_PULLED_FILE):
-            display_name = os.path.basename(LAST_PULLED_FILE)
-            if len(display_name) > 30:
-                display_name = display_name[:27] + "..."
-            airdrop_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                f"AirDrop '{display_name}' to iOS...", "airdropLastFile:", ""
-            )
-            menu.addItem_(airdrop_item)
-            menu.addItem_(NSMenuItem.separatorItem())
-
-        # Nearby sharing devices list
-        devices_header = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Nearby Share Devices:", None, "")
-        devices_header.setEnabled_(False)
-        menu.addItem_(devices_header)
-
-        if bonjour_manager and bonjour_manager.discovered_devices:
-            for name in bonjour_manager.discovered_devices:
-                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                    f"  📱 {name} (Click to Send)", "sendFileToDevice:", ""
-                )
-                item.setRepresentedObject_(name)
-                menu.addItem_(item)
-        else:
-            no_devices_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("  No devices discovered", None, "")
-            no_devices_item.setEnabled_(False)
-            menu.addItem_(no_devices_item)
-
-        menu.addItem_(NSMenuItem.separatorItem())
-
-        open_folder_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Open NothingDrop Folder", "openNothingDrop:", ""
-        )
-        menu.addItem_(open_folder_item)
-
-        connect_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Connect Wireless ADB...", "connectADB:", ""
-        )
-        menu.addItem_(connect_item)
-
-        if self.connected:
-            install_helper_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                "Install Nothing AirShare APK...", "installHelper:", ""
-            )
-            menu.addItem_(install_helper_item)
-
-        menu.addItem_(NSMenuItem.separatorItem())
-
-        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Quit Nothing Sync", "quitApp:", "")
-        menu.addItem_(quit_item)
-
-        self.status_item.setMenu_(menu)
+            self.status_item.button().setTitle_("")
+            self.status_item.button().setImage_(create_template_dot(filled=False))
+            
+        if self.popover.isShown():
+            self.popover_vc.refresh_data()
 
     def restoreClipboard_(self, sender):
         text = sender.representedObject()

@@ -5,11 +5,21 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.Ringtone
+import android.media.RingtoneManager
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 
 class ClipboardReceiver : BroadcastReceiver() {
+    companion object {
+        private var activeRingtone: Ringtone? = null
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val action = intent.action
@@ -41,6 +51,42 @@ class ClipboardReceiver : BroadcastReceiver() {
                 Log.d("ClipboardReceiver", "Clipboard get: $text")
             } else {
                 setResult(0, "", null)
+            }
+        } else if ("clipper.ring" == action) {
+            try {
+                activeRingtone?.let {
+                    if (it.isPlaying) {
+                        it.stop()
+                    }
+                }
+                val notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                val newRingtone = RingtoneManager.getRingtone(context, notificationUri)
+                if (newRingtone != null) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        newRingtone.audioAttributes = AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    }
+                    newRingtone.play()
+                    activeRingtone = newRingtone
+                    Toast.makeText(context, "Finding Nothing Phone...", Toast.LENGTH_SHORT).show()
+                    Log.d("ClipboardReceiver", "Find My Phone: Alarm playing")
+                    
+                    // Stop after 15 seconds
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        try {
+                            if (newRingtone.isPlaying) {
+                                newRingtone.stop()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("ClipboardReceiver", "Error stopping alarm: ${e.message}")
+                        }
+                    }, 15000)
+                }
+            } catch (e: Exception) {
+                Log.e("ClipboardReceiver", "Error triggering Find My Phone alarm: ${e.message}")
             }
         }
     }
