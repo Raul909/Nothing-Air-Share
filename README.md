@@ -4,7 +4,7 @@
 
 This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, etc.) and the Apple ecosystem. It completely eliminates the need for an intermediate bridge or third-party cloud accounts by using a **single Android APK**, a **lightweight macOS menu bar daemon**, and Apple's **built-in AirDrop/Universal Clipboard APIs**.
 
-📦 **[Download NothingAirShare.apk (v2.5.0)](https://github.com/Raul909/Nothing-Air-Share/raw/main/apk/NothingAirShare.apk)**
+[![Download APK](apk/download_btn.svg)](https://github.com/Raul909/Nothing-Air-Share/raw/main/apk/NothingAirShare.apk)
 
 ---
 
@@ -15,7 +15,8 @@ This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, e
            │                              │                                 │
            │ ─── Wireless ADB Sync ─────► │ ◄─── Native Apple AirDrop ───── │  (File Transfer)
            │      (Background Stream)     │                                 │
-           │                              │ ◄─── Universal Clipboard ────── │  (Clipboard Sync)
+           │ ◄─── Wi-Fi Direct Sockets ──►│ ◄─── Universal Clipboard ────── │  (Clipboard & Remote)
+           │      (Media, Input, P2P)     │                                 │
 ```
 
 1. **Android**: A single background APK (`NothingAirShare.apk`) that acts as a native clipboard listener and integrates into the Android Share Sheet.
