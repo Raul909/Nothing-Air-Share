@@ -110,7 +110,8 @@ A **Nothing Dot (`⚫️`)** will appear in your Mac's menu bar. You're running!
 
 **On your Mac (Terminal):**
 ```bash
-adb pair 192.168.1.100:12345
+adb pair <IP>:<PORT>
+# Replace <IP>:<PORT> with the address shown on your phone screen
 # Enter the 6-digit pairing code when prompted
 ```
 
@@ -118,7 +119,7 @@ adb pair 192.168.1.100:12345
 
 1. Click the `⚫️` icon in your Mac's menu bar
 2. Select **Connect Wireless ADB...**
-3. Enter your phone's Wireless Debugging IP and port (e.g., `192.168.1.100:5555`)
+3. Enter your phone's Wireless Debugging IP and port (shown on the Wireless Debugging screen)
 4. The dot turns **white (`⚪️`)** when connected, along with battery percentage
 
 > **Tip:** The daemon remembers your last connection address and auto-reconnects on startup.
