@@ -13,7 +13,7 @@ from AppKit import (
     NSVariableStatusItemLength, NSWorkspace,
     NSPasteboard, NSStringPboardType, NSFilenamesPboardType,
     NSTIFFPboardType, NSImage, NSBitmapImageRep, NSPNGFileType,
-    NSSharingService, NSSharingServiceTypeSendViaAirDrop
+    NSSharingService, NSSharingServiceNameSendViaAirDrop
 )
 from Foundation import NSObject, NSURL, NSNetService, NSNetServiceBrowser
 import objc
@@ -979,7 +979,7 @@ class ApplicationBootstrap(NSObject):
         global LAST_PULLED_FILE
         if LAST_PULLED_FILE and os.path.exists(LAST_PULLED_FILE):
             url = NSURL.fileURLWithPath_(LAST_PULLED_FILE)
-            service = NSSharingService.sharingServiceNamed_(NSSharingServiceTypeSendViaAirDrop)
+            service = NSSharingService.sharingServiceNamed_(NSSharingServiceNameSendViaAirDrop)
             if service:
                 service.performWithItems_([url])
                 print(f"[AirDrop] Shared last pulled file with iOS/AirDrop: {LAST_PULLED_FILE}")
