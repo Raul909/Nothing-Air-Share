@@ -1,12 +1,16 @@
 <p align="center">
-  <img src="apk/icon.png" width="128" height="128" alt="Nothing AirShare Logo" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apk/icon_dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="apk/icon.png">
+    <img alt="Nothing AirShare Logo" src="apk/icon.png" width="96" height="96" />
+  </picture>
 </p>
 
 # Nothing AirShare & Sync ⚪️⚫️
 
 **Seamless file sharing and bidirectional clipboard sync between iOS, macOS, and Nothing OS—without custom iOS apps.**
 
-This project bridges Nothing OS devices (Phone 1, 2, 2a, 2a Plus, CMF Phone 1, etc.) and the Apple ecosystem. It completely eliminates the need for an intermediate bridge or third-party cloud accounts by using a **single Android APK**, a **lightweight macOS menu bar popover daemon**, and Apple's **built-in AirDrop/Universal Clipboard APIs**.
+*Featuring a custom, minimalist Nothing OS-inspired dot-matrix adaptive icon designed with transparency. It dynamically inverts between light and dark themes to fit perfectly in your browser or phone launcher! Showcasing open-source collaboration and creative interface design.*
 
 [![Download Latest APK](apk/download_latest.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 

@@ -1,19 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="black">#000000</color>
-    <color name="white">#FFFFFF</color>
+    <color name="black">#FBFBF9</color> <!-- Root background in light theme -->
+    <color name="white">#000000</color> <!-- Primary text/foreground in light theme -->
     <color name="nothing_red">#D32F2F</color>
     <color name="nothing_red_dark">#B71C1C</color>
     <color name="nothing_red_tint">#1AD32F2F</color>
-    <color name="card_bg">#111111</color>
-    <color name="card_border">#1A1A1A</color>
+    <color name="card_bg">#F2F2F0</color>
+    <color name="card_border">#E5E5E3</color>
     <color name="card_active_border">#D32F2F</color>
-    <color name="surface_dark">#0A0A0A</color>
-    <color name="text_primary">#FFFFFF</color>
-    <color name="text_secondary">#888888</color>
-    <color name="text_tertiary">#555555</color>
-    <color name="text_muted">#333333</color>
-    <color name="divider">#222222</color>
-    <color name="drawer_bg">#0A0A0A</color>
+    <color name="surface_dark">#FFFFFF</color> <!-- Surface for inputs in light theme -->
+    <color name="text_primary">#000000</color>
+    <color name="text_secondary">#666666</color>
+    <color name="text_tertiary">#888888</color>
+    <color name="text_muted">#AAAAAA</color>
+    <color name="divider">#E0E0DF</color>
+    <color name="drawer_bg">#F2F2F0</color>
     <color name="status_green">#4CAF50</color>
+    <color name="btn_dark_bg">#F2F2F0</color>
+    <color name="btn_dark_stroke">#E5E5E3</color>
+    <color name="ic_background">#FFFFFF</color>
 </resources>

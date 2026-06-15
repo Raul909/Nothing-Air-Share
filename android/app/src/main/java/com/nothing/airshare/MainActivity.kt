@@ -63,6 +63,16 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Apply theme before inflating views to avoid recreation flicker
+        val initialPrefs = getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
+        val startupTheme = initialPrefs.getString("pref_theme", "system") ?: "system"
+        val nightMode = when (startupTheme) {
+            "light" -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
+            "dark" -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+            else -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+        }
+        androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(nightMode)
+
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -163,6 +173,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         val savedFindPhone = prefs.getBoolean("pref_find_phone", true)
         val savedRemoteInput = prefs.getBoolean("pref_remote_input", true)
         val savedFontSize = prefs.getString("pref_font_size", "medium") ?: "medium"
+        val savedTheme = prefs.getString("pref_theme", "system") ?: "system"
         
         binding.etMacIp.setText(savedMacIp)
         binding.etMacPort.setText(savedMacPort.toString())
@@ -177,6 +188,12 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
             else -> binding.rbFontMedium.isChecked = true
         }
         applyFontSettings()
+
+        when (savedTheme) {
+            "light" -> binding.rbThemeLight.isChecked = true
+            "dark" -> binding.rbThemeDark.isChecked = true
+            else -> binding.rbThemeSystem.isChecked = true
+        }
 
         // Drawer click handlers
         binding.drawerSettings.setOnClickListener {
@@ -210,6 +227,11 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
                 R.id.rbFontLarge -> "large"
                 else -> "medium"
             }
+            val selectedTheme = when (binding.rgTheme.checkedRadioButtonId) {
+                R.id.rbThemeLight -> "light"
+                R.id.rbThemeDark -> "dark"
+                else -> "system"
+            }
 
             prefs.edit().apply {
                 putString("mac_ip", macIp)
@@ -219,9 +241,17 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
                 putBoolean("pref_find_phone", findPhone)
                 putBoolean("pref_remote_input", remoteInput)
                 putString("pref_font_size", fontSize)
+                putString("pref_theme", selectedTheme)
                 apply()
             }
             applyFontSettings()
+
+            val mode = when (selectedTheme) {
+                "light" -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
+                "dark" -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+                else -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+            }
+            androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(mode)
 
             // Update local server port and restart server if local port changed
             if (FileTransferService.port != localPort) {

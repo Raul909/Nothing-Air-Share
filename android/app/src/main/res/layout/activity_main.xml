@@ -403,7 +403,7 @@
                                 android:layout_weight="1"
                                 android:text="@string/btn_paste"
                                 android:background="@drawable/btn_dark"
-                                app:backgroundTint="#1A1A1A"
+                                app:backgroundTint="@color/btn_dark_bg"
                                 android:textColor="@color/white"
                                 android:fontFamily="@font/ndot57"
                                 android:textSize="12sp"
@@ -796,6 +796,63 @@
                             android:background="@color/divider"
                             android:layout_marginVertical="24dp" />
 
+                        <!-- Section: Theme -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="THEME"
+                            android:textColor="@color/nothing_red"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:fontFamily="@font/ndot57" />
+
+                        <RadioGroup
+                            android:id="@+id/rgTheme"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:layout_marginTop="12dp">
+
+                            <RadioButton
+                                android:id="@+id/rbThemeSystem"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1.2"
+                                android:text="SYSTEM"
+                                android:textColor="@color/white"
+                                android:buttonTint="@color/white"
+                                android:fontFamily="@font/letteramono"
+                                android:textSize="11sp" />
+
+                            <RadioButton
+                                android:id="@+id/rbThemeLight"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="LIGHT"
+                                android:textColor="@color/white"
+                                android:buttonTint="@color/white"
+                                android:fontFamily="@font/letteramono"
+                                android:textSize="11sp" />
+
+                            <RadioButton
+                                android:id="@+id/rbThemeDark"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="DARK"
+                                android:textColor="@color/white"
+                                android:buttonTint="@color/white"
+                                android:fontFamily="@font/letteramono"
+                                android:textSize="11sp" />
+                        </RadioGroup>
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="@color/divider"
+                            android:layout_marginVertical="24dp" />
+
                         <!-- Section: Font Size -->
                         <TextView
                             android:layout_width="wrap_content"
@@ -918,7 +975,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="48dp"
                             android:background="@drawable/btn_dark"
-                            app:backgroundTint="#1A1A1A"
+                            app:backgroundTint="@color/btn_dark_bg"
                             android:text="⚙ WIRELESS DEBUGGING"
                             android:textColor="@color/white"
                             android:textSize="14sp"
