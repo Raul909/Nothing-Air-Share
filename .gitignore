@@ -6,6 +6,10 @@
 __pycache__/
 *.pyc
 
+# macOS metadata
+.DS_Store
+
+
 # Android build outputs and caches
 .gradle/
 build/
