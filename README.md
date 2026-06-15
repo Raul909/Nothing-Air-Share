@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="apk/icon.png" width="128" height="128" alt="Nothing AirShare Logo" />
+</p>
+
 # Nothing AirShare & Sync ⚪️⚫️
 
 **Seamless file sharing and bidirectional clipboard sync between iOS, macOS, and Nothing OS—without custom iOS apps.**
