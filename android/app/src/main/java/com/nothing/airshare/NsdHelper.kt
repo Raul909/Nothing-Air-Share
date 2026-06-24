@@ -11,6 +11,10 @@ class NsdHelper(private val context: Context, private val listener: NsdListener)
     private val serviceType = "_nothing-share._tcp."
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
+    private var registeredServiceName: String = "Nothing Phone Share"
+    
+    private val resolveQueue = java.util.concurrent.LinkedBlockingQueue<NsdServiceInfo>()
+    private var isResolving = java.util.concurrent.atomic.AtomicBoolean(false)
 
     interface NsdListener {
         fun onDeviceDiscovered(name: String, host: InetAddress, port: Int)
@@ -27,6 +31,7 @@ class NsdHelper(private val context: Context, private val listener: NsdListener)
         registrationListener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(nsdServiceInfo: NsdServiceInfo) {
                 Log.d("NSD", "Service registered successfully: ${nsdServiceInfo.serviceName}")
+                registeredServiceName = nsdServiceInfo.serviceName
             }
 
             override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
@@ -63,8 +68,9 @@ class NsdHelper(private val context: Context, private val listener: NsdListener)
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
                 Log.d("NSD", "Service found: ${serviceInfo.serviceName}")
                 if (serviceInfo.serviceType == serviceType) {
-                    if (serviceInfo.serviceName != "Nothing Phone Share") {
-                        resolveService(serviceInfo)
+                    if (serviceInfo.serviceName != registeredServiceName) {
+                        resolveQueue.add(serviceInfo)
+                        resolveNext()
                     }
                 }
             }
@@ -78,23 +84,41 @@ class NsdHelper(private val context: Context, private val listener: NsdListener)
         nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
     }
 
-    private fun resolveService(serviceInfo: NsdServiceInfo) {
-        val resolveListener = object : NsdManager.ResolveListener {
-            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                Log.e("NSD", "Resolve failed: $errorCode")
+    private fun resolveNext() {
+        if (isResolving.compareAndSet(false, true)) {
+            val serviceInfo = resolveQueue.poll()
+            if (serviceInfo == null) {
+                isResolving.set(false)
+                return
             }
 
-            override fun onServiceResolved(resolvedServiceInfo: NsdServiceInfo) {
-                Log.d("NSD", "Resolve succeeded: ${resolvedServiceInfo.serviceName} at ${resolvedServiceInfo.host}:${resolvedServiceInfo.port}")
-                listener.onDeviceDiscovered(
-                    resolvedServiceInfo.serviceName,
-                    resolvedServiceInfo.host,
-                    resolvedServiceInfo.port
-                )
+            val resolveListener = object : NsdManager.ResolveListener {
+                override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                    Log.e("NSD", "Resolve failed: $errorCode")
+                    isResolving.set(false)
+                    resolveNext()
+                }
+
+                override fun onServiceResolved(resolvedServiceInfo: NsdServiceInfo) {
+                    Log.d("NSD", "Resolve succeeded: ${resolvedServiceInfo.serviceName} at ${resolvedServiceInfo.host}:${resolvedServiceInfo.port}")
+                    listener.onDeviceDiscovered(
+                        resolvedServiceInfo.serviceName,
+                        resolvedServiceInfo.host,
+                        resolvedServiceInfo.port
+                    )
+                    isResolving.set(false)
+                    resolveNext()
+                }
+            }
+            
+            try {
+                nsdManager.resolveService(serviceInfo, resolveListener)
+            } catch (e: Exception) {
+                Log.e("NSD", "Resolve exception: ${e.message}")
+                isResolving.set(false)
+                resolveNext()
             }
         }
-        
-        nsdManager.resolveService(serviceInfo, resolveListener)
     }
 
     fun stop() {
