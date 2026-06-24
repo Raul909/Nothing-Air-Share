@@ -721,11 +721,15 @@ def status_polling_loop():
                     level = None
                     charging = False
                     for line in res.stdout.splitlines():
-                        if "level:" in line:
-                            level = int(line.split(":")[1].strip())
-                        if "status:" in line:
-                            status = int(line.split(":")[1].strip())
-                            charging = status in (2, 5)
+                        if ":" in line:
+                            parts = line.split(":", 1)
+                            key = parts[0].strip()
+                            val = parts[1].strip()
+                            if key == "level":
+                                level = int(val)
+                            elif key == "status":
+                                status = int(val)
+                                charging = status in (2, 5)
                     if level is not None:
                         app_delegate.update_battery_level_charging(level, charging)
             except Exception as e:
