@@ -687,6 +687,27 @@ def run_adb_connect(address):
         config["last_address"] = address
         save_config(config)
 
+def run_adb_pair(address, code):
+    print(f"[ADB] Attempting to pair with: {address} using code {code}")
+    proc = subprocess.Popen(
+        ["adb", "pair", address],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    try:
+        stdout, stderr = proc.communicate(input=f"{code}\n", timeout=15)
+        out = (stdout or "").strip() + "\n" + (stderr or "").strip()
+        print(f"[ADB Pair Result] {out}")
+        if "Successfully paired to" in out:
+            return True, out
+        else:
+            return False, out
+    except Exception as e:
+        proc.kill()
+        return False, str(e)
+
 # Threads for operations
 def status_polling_loop():
     # Monitors Focus and Battery
@@ -744,9 +765,9 @@ def mac_clipboard_watcher():
         time.sleep(0.2)
 
 def android_event_monitor():
-    # Watches Android clipboard and file drop directory via a single persistent stream
-    global CURRENT_CLIPBOARD_CONTENT
+    global CURRENT_CLIPBOARD_CONTENT, app_delegate
     
+    # Persistent shell script to monitor clipboard, focus, and files on Android
     shell_script = """
 last_clip=""
 last_files=""
@@ -802,12 +823,12 @@ done
                 if "last_address" in config:
                     print(f"[ADB] Trying auto-reconnect to {config['last_address']}...")
                     subprocess.run(["adb", "connect", config["last_address"]], capture_output=True, timeout=5)
-                    time.sleep(2)
+                    time.sleep(10)
                     continue
                 
                 if app_delegate:
                     app_delegate.set_connected(False)
-                time.sleep(4)
+                time.sleep(10)
                 continue
             
             if app_delegate:
@@ -1074,29 +1095,34 @@ class CardView(NSView):
 
 class NothingPopoverViewController(NSViewController):
     def init(self):
+        print("[PopoverVC] init called")
         self = objc.super(NothingPopoverViewController, self).init()
         if self:
             self.app_delegate = None
             self.button_device_map = {}
             self.button_history_map = {}
+        print(f"[PopoverVC] init returning {self}")
         return self
 
     def loadView(self):
-        self.main_effect_view = NSVisualEffectView.alloc().initWithFrame_(((0, 0), (360, 600)))
+        print("[PopoverVC] loadView called")
+        self.main_effect_view = NSVisualEffectView.alloc().initWithFrame_(((0, 0), (360, 530)))
         self.main_effect_view.setMaterial_(4)
         self.main_effect_view.setBlendingMode_(0)
         self.main_effect_view.setState_(1)
         self.main_effect_view.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
         
-        self.content_view = NSView.alloc().initWithFrame_(((0, 0), (360, 600)))
+        self.content_view = NSView.alloc().initWithFrame_(((0, 0), (360, 530)))
         self.main_effect_view.addSubview_(self.content_view)
         self.setView_(self.main_effect_view)
         
+        print("[PopoverVC] calling setup_ui")
         self.setup_ui()
+        print("[PopoverVC] loadView finished")
 
     def setup_ui(self):
         # Header
-        header_bg = NSView.alloc().initWithFrame_(((0, 560), (360, 40)))
+        header_bg = NSView.alloc().initWithFrame_(((0, 490), (360, 40)))
         header_bg.setWantsLayer_(True)
         header_bg.layer().setBackgroundColor_(NSColor.blackColor().CGColor())
         
@@ -1112,7 +1138,7 @@ class NothingPopoverViewController(NSViewController):
         title_label.setFrame_(((32, 10), (200, 20)))
         header_bg.addSubview_(title_label)
         
-        version_label = NSTextField.labelWithString_("v2.7.0")
+        version_label = NSTextField.labelWithString_("v2.7.1")
         version_label.setFont_(NSFont.systemFontOfSize_(10))
         version_label.setTextColor_(NSColor.grayColor())
         version_label.setFrame_(((300, 10), (44, 20)))
@@ -1122,7 +1148,7 @@ class NothingPopoverViewController(NSViewController):
         self.content_view.addSubview_(header_bg)
         
         # Status Card
-        self.status_card = NSView.alloc().initWithFrame_(((16, 475), (328, 70)))
+        self.status_card = NSView.alloc().initWithFrame_(((16, 410), (328, 70)))
         self.status_card.setWantsLayer_(True)
         self.status_card.layer().setCornerRadius_(12)
         self.status_card.layer().setBackgroundColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(0.08, 0.08, 0.08, 1.0).CGColor())
@@ -1150,23 +1176,23 @@ class NothingPopoverViewController(NSViewController):
         
         # Action Cards Grid
         self.card_clipboard = CardView.alloc().initWithFrame_icon_title_action_(
-            ((16, 385), (100, 75)), "📋", "Clipboard", self.action_clipboard
+            ((16, 325), (100, 75)), "📋", "Clipboard", self.action_clipboard
         )
         self.card_send = CardView.alloc().initWithFrame_icon_title_action_(
-            ((130, 385), (100, 75)), "📁", "Send Files", self.action_send_files
+            ((130, 325), (100, 75)), "📁", "Send Files", self.action_send_files
         )
         self.card_remote = CardView.alloc().initWithFrame_icon_title_action_(
-            ((244, 385), (100, 75)), "🖱️", "Remote Input", self.action_remote_input
+            ((244, 325), (100, 75)), "🖱️", "Remote Input", self.action_remote_input
         )
         
         self.card_media = CardView.alloc().initWithFrame_icon_title_action_(
-            ((16, 300), (100, 75)), "🎵", "Media", self.action_media
+            ((16, 245), (100, 75)), "🎵", "Media", self.action_media
         )
         self.card_find = CardView.alloc().initWithFrame_icon_title_action_(
-            ((130, 300), (100, 75)), "📱", "Find Phone", self.action_find_phone
+            ((130, 245), (100, 75)), "📱", "Find Phone", self.action_find_phone
         )
         self.card_commands = CardView.alloc().initWithFrame_icon_title_action_(
-            ((244, 300), (100, 75)), "⚙️", "Commands", self.action_commands
+            ((244, 245), (100, 75)), "⚙️", "Commands", self.action_commands
         )
         
         self.content_view.addSubview_(self.card_clipboard)
@@ -1180,31 +1206,31 @@ class NothingPopoverViewController(NSViewController):
         self.devices_section_title = NSTextField.labelWithString_("─── NEARBY DEVICES ───")
         self.devices_section_title.setFont_(NSFont.boldSystemFontOfSize_(9))
         self.devices_section_title.setTextColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(211/255.0, 47/255.0, 47/255.0, 1.0))
-        self.devices_section_title.setFrame_(((16, 265), (328, 15)))
+        self.devices_section_title.setFrame_(((16, 215), (328, 15)))
         self.content_view.addSubview_(self.devices_section_title)
         
-        self.devices_container = NSView.alloc().initWithFrame_(((16, 205), (328, 55)))
+        self.devices_container = NSView.alloc().initWithFrame_(((16, 165), (328, 45)))
         self.content_view.addSubview_(self.devices_container)
         
         # Clipboard History Section
         self.clipboard_section_title = NSTextField.labelWithString_("─── CLIPBOARD HISTORY ───")
         self.clipboard_section_title.setFont_(NSFont.boldSystemFontOfSize_(9))
         self.clipboard_section_title.setTextColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(211/255.0, 47/255.0, 47/255.0, 1.0))
-        self.clipboard_section_title.setFrame_(((16, 180), (328, 15)))
+        self.clipboard_section_title.setFrame_(((16, 140), (328, 15)))
         self.content_view.addSubview_(self.clipboard_section_title)
         
-        self.clipboard_container = NSView.alloc().initWithFrame_(((16, 95), (328, 80)))
+        self.clipboard_container = NSView.alloc().initWithFrame_(((16, 80), (328, 55)))
         self.content_view.addSubview_(self.clipboard_container)
         
         # Bottom Action Buttons
-        self.btn_open_folder = NSButton.alloc().initWithFrame_(((16, 50), (158, 32)))
+        self.btn_open_folder = NSButton.alloc().initWithFrame_(((16, 40), (158, 32)))
         self.btn_open_folder.setTitle_("Open NothingDrop")
         self.btn_open_folder.setBezelStyle_(NSBezelStyleRounded)
         self.btn_open_folder.setTarget_(self)
         self.btn_open_folder.setAction_("openFolderClicked:")
         self.content_view.addSubview_(self.btn_open_folder)
         
-        self.btn_connect_adb = NSButton.alloc().initWithFrame_(((186, 50), (158, 32)))
+        self.btn_connect_adb = NSButton.alloc().initWithFrame_(((186, 40), (158, 32)))
         self.btn_connect_adb.setTitle_("Connect ADB")
         self.btn_connect_adb.setBezelStyle_(NSBezelStyleRounded)
         self.btn_connect_adb.setTarget_(self)
@@ -1212,7 +1238,7 @@ class NothingPopoverViewController(NSViewController):
         self.content_view.addSubview_(self.btn_connect_adb)
         
         # Quit Button
-        self.btn_quit = NSButton.alloc().initWithFrame_(((16, 12), (328, 32)))
+        self.btn_quit = NSButton.alloc().initWithFrame_(((16, 6), (328, 32)))
         self.btn_quit.setTitle_("Quit Nothing Sync")
         self.btn_quit.setBezelStyle_(NSBezelStyleRounded)
         self.btn_quit.setTarget_(self)
@@ -1240,7 +1266,7 @@ class NothingPopoverViewController(NSViewController):
         for subview in list(self.devices_container.subviews()):
             subview.removeFromSuperview()
             
-        y_offset = 35
+        y_offset = 25
         devices = []
         if bonjour_manager and bonjour_manager.discovered_devices:
             for name in bonjour_manager.discovered_devices:
@@ -1276,7 +1302,7 @@ class NothingPopoverViewController(NSViewController):
         for subview in list(self.clipboard_container.subviews()):
             subview.removeFromSuperview()
             
-        y_offset = 60
+        y_offset = 32
         history = db.get_history() if db else []
         if not history:
             lbl = NSTextField.labelWithString_("Clipboard history is empty")
@@ -1285,7 +1311,7 @@ class NothingPopoverViewController(NSViewController):
             lbl.setFrame_(((0, y_offset), (328, 18)))
             self.clipboard_container.addSubview_(lbl)
         else:
-            for text in history[:3]:
+            for text in history[:2]:
                 display_text = text.replace('\n', ' ')
                 if len(display_text) > 42:
                     display_text = display_text[:39] + "..."
@@ -1316,6 +1342,7 @@ class NothingPopoverViewController(NSViewController):
 
     @objc.IBAction
     def historyItemClicked_(self, sender):
+        print(f"[PopoverVC] historyItemClicked_ called with sender {sender}")
         text = self.button_history_map.get(sender)
         if text:
             set_mac_clipboard("text", text)
@@ -1326,6 +1353,7 @@ class NothingPopoverViewController(NSViewController):
 
     @objc.IBAction
     def sendToNearbyDevice_(self, sender):
+        print(f"[PopoverVC] sendToNearbyDevice_ called with sender {sender}")
         device_name = self.button_device_map.get(sender)
         if device_name and self.app_delegate:
             fake_sender = NSObject.alloc().init()
@@ -1334,16 +1362,19 @@ class NothingPopoverViewController(NSViewController):
 
     @objc.IBAction
     def openFolderClicked_(self, sender):
+        print(f"[PopoverVC] openFolderClicked_ called with sender {sender}")
         if self.app_delegate:
             self.app_delegate.openNothingDrop_(sender)
 
     @objc.IBAction
     def connectAdbClicked_(self, sender):
+        print(f"[PopoverVC] connectAdbClicked_ called with sender {sender}")
         if self.app_delegate:
             self.app_delegate.connectADB_(sender)
 
     @objc.IBAction
     def quitClicked_(self, sender):
+        print(f"[PopoverVC] quitClicked_ called with sender {sender}")
         if self.app_delegate:
             self.app_delegate.quitApp_(sender)
 
@@ -1425,7 +1456,7 @@ class ApplicationBootstrap(NSObject):
         # Create Popover and Popover ViewController
         self.popover = NSPopover.alloc().init()
         self.popover.setBehavior_(1) # NSPopoverBehaviorTransient
-        self.popover.setContentSize_((360, 600))
+        self.popover.setContentSize_((360, 530))
         
         self.popover_vc = NothingPopoverViewController.alloc().init()
         self.popover_vc.app_delegate = self
@@ -1472,19 +1503,31 @@ class ApplicationBootstrap(NSObject):
     # NSMenuDelegate: intercept menu open to show popover instead
     @objc.signature(b'v@:@')
     def menuWillOpen_(self, menu):
+        print("[MenuDelegate] menuWillOpen_ called!")
         # Cancel the (empty) menu from actually appearing
         menu.cancelTracking()
         # Toggle the popover
         self._togglePopover()
 
     def _togglePopover(self):
+        print("[Popover] _togglePopover called!")
         button = self.status_item.button()
+        print(f"[Popover] Is shown? {self.popover.isShown()}")
         if self.popover.isShown():
             self.popover.performClose_(None)
         else:
             # Activate the app so the popover can become key window
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-            self.popover_vc.refresh_data()
+            if self.popover_vc.isViewLoaded():
+                try:
+                    self.popover_vc.refresh_data()
+                except Exception as e:
+                    import traceback
+                    print(f"[Popover] Error in refresh_data: {e}")
+                    traceback.print_exc()
+            else:
+                print("[Popover] View controller view not loaded yet, skipping pre-refresh")
+            print("[Popover] Showing popover relative to status bar button...")
             self.popover.showRelativeToRect_ofView_preferredEdge_(
                 button.bounds(),
                 button,
@@ -1492,8 +1535,9 @@ class ApplicationBootstrap(NSObject):
             )
             try:
                 self.popover.contentViewController().view().window().makeKeyWindow()
-            except Exception:
-                pass
+                print("[Popover] Popover window made key window.")
+            except Exception as e:
+                print(f"[Popover] Error making window key: {e}")
 
     def updateUIOnMainThread(self):
         if self.connected:
@@ -1549,10 +1593,13 @@ class ApplicationBootstrap(NSObject):
                 print(f"[AirDrop] Shared last pulled file with iOS/AirDrop: {LAST_PULLED_FILE}")
 
     def openNothingDrop_(self, sender):
+        print("[AppBootstrap] openNothingDrop_ called!")
         workspace = NSWorkspace.sharedWorkspace()
-        workspace.openFile_(DROP_ZONE_MAC)
+        url = NSURL.fileURLWithPath_(DROP_ZONE_MAC)
+        workspace.openURL_(url)
 
     def connectADB_(self, sender):
+        print("[AppBootstrap] connectADB_ called!")
         threading.Thread(target=self.show_connect_dialog).start()
 
     def installHelper_(self, sender):
@@ -1600,25 +1647,120 @@ class ApplicationBootstrap(NSObject):
         )
 
     def runConnectDialogOnMainThread(self):
+        # Close popover to prevent focus conflicts and activate app
+        if hasattr(self, 'popover') and self.popover.isShown():
+            self.popover.performClose_(None)
+            
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        
         from AppKit import NSAlert, NSTextField
         alert = NSAlert.alloc().init()
-        alert.setMessageText_("Connect ADB Wireless")
-        alert.setInformativeText_("Enter Nothing Phone's IP and Port (e.g. 192.168.1.100:5555):")
+        alert.setMessageText_("Connect or Pair ADB Wireless")
+        alert.setInformativeText_(
+            "If your Nothing Phone is not paired with this Mac yet, click 'Pair Device' first.\n"
+            "Otherwise, enter the Wireless Debugging IP & Port (e.g. 192.168.1.30:33349) and click 'Connect':"
+        )
         alert.addButtonWithTitle_("Connect")
+        alert.addButtonWithTitle_("Pair Device")
         alert.addButtonWithTitle_("Cancel")
         
-        input_field = NSTextField.alloc().initWithFrame_(((0, 0), (200, 24)))
+        # Pre-fill discovered address if available
+        default_address = ""
+        if bonjour_manager and bonjour_manager.discovered_devices:
+            for name, (host, port) in bonjour_manager.discovered_devices.items():
+                if "adb" in name.lower() or "connect" in name.lower():
+                    default_address = f"{host}:{port}"
+                    break
+        if not default_address:
+            config = load_config()
+            default_address = config.get("last_address", "")
+            
+        input_field = NSTextField.alloc().initWithFrame_(((0, 0), (240, 24)))
         input_field.setPlaceholderString_("192.168.1.100:5555")
+        input_field.setStringValue_(default_address)
         alert.setAccessoryView_(input_field)
         
         response = alert.runModal()
-        if response == 1000:
+        if response == 1000:  # Connect
             address = input_field.stringValue()
             if address:
-                save_config({"last_address": address})
+                config = load_config()
+                config["last_address"] = address
+                save_config(config)
                 threading.Thread(target=run_adb_connect, args=(address,)).start()
+        elif response == 1001:  # Pair Device
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "runPairDialogOnMainThread", None, False
+            )
+
+    def runPairDialogOnMainThread(self):
+        from AppKit import NSAlert, NSTextField, NSView
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Pair Device via ADB")
+        alert.setInformativeText_(
+            "1. On your phone, go to 'Developer Options' -> 'Wireless debugging'.\n"
+            "2. Tap 'Pair device with pairing code'.\n"
+            "3. Enter the pairing IP & Port and the 6-digit Wi-Fi pairing code below:"
+        )
+        alert.addButtonWithTitle_("Pair")
+        alert.addButtonWithTitle_("Cancel")
+        
+        container = NSView.alloc().initWithFrame_(((0, 0), (280, 60)))
+        
+        ip_field = NSTextField.alloc().initWithFrame_(((0, 32), (280, 24)))
+        ip_field.setPlaceholderString_("Pairing IP & Port (e.g. 192.168.1.30:38291)")
+        
+        # Pre-fill discovered IP
+        default_ip = ""
+        if bonjour_manager and bonjour_manager.discovered_devices:
+            for name, (host, port) in bonjour_manager.discovered_devices.items():
+                if "adb" in name.lower() or "connect" in name.lower():
+                    default_ip = f"{host}:"
+                    break
+        if not default_ip:
+            config = load_config()
+            last_addr = config.get("last_address", "")
+            if last_addr and ":" in last_addr:
+                default_ip = f"{last_addr.split(':')[0]}:"
+        ip_field.setStringValue_(default_ip)
+        
+        code_field = NSTextField.alloc().initWithFrame_(((0, 0), (140, 24)))
+        code_field.setPlaceholderString_("Pairing Code")
+        
+        container.addSubview_(ip_field)
+        container.addSubview_(code_field)
+        alert.setAccessoryView_(container)
+        
+        response = alert.runModal()
+        if response == 1000:  # Pair
+            address = ip_field.stringValue()
+            code = code_field.stringValue()
+            if address and code:
+                threading.Thread(target=self.run_adb_pair_bg, args=(address, code)).start()
+
+    def run_adb_pair_bg(self, address, code):
+        print(f"[ADB] Pairing with {address} using code {code}...")
+        send_mac_notification("Nothing AirShare", f"Pairing with {address}...")
+        success, out = run_adb_pair(address, code)
+        if success:
+            print(f"[ADB] Pairing success: {out}")
+            send_mac_notification("Nothing AirShare Success", "Devices successfully paired! You can now Connect.")
+        else:
+            print(f"[ADB] Pairing failed: {out}")
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "showPairError:", f"Pairing failed:\n{out}", False
+            )
+
+    def showPairError_(self, message):
+        from AppKit import NSAlert
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Pairing Failed")
+        alert.setInformativeText_(message)
+        alert.addButtonWithTitle_("OK")
+        alert.runModal()
 
     def quitApp_(self, sender):
+        print("[AppBootstrap] quitApp_ called!")
         NSApplication.sharedApplication().terminate_(None)
 
 def main():
