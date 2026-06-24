@@ -1314,6 +1314,7 @@ class NothingPopoverViewController(NSViewController):
                 self.clipboard_container.addSubview_(row_btn)
                 y_offset -= 22
 
+    @objc.IBAction
     def historyItemClicked_(self, sender):
         text = self.button_history_map.get(sender)
         if text:
@@ -1323,6 +1324,7 @@ class NothingPopoverViewController(NSViewController):
             if self.app_delegate and self.app_delegate.connected:
                 threading.Thread(target=push_to_android_clipboard, args=({"type": "text", "data": text},), daemon=True).start()
 
+    @objc.IBAction
     def sendToNearbyDevice_(self, sender):
         device_name = self.button_device_map.get(sender)
         if device_name and self.app_delegate:
@@ -1330,14 +1332,17 @@ class NothingPopoverViewController(NSViewController):
             fake_sender.representedObject = lambda: device_name
             self.app_delegate.sendFileToDevice_(fake_sender)
 
+    @objc.IBAction
     def openFolderClicked_(self, sender):
         if self.app_delegate:
             self.app_delegate.openNothingDrop_(sender)
 
+    @objc.IBAction
     def connectAdbClicked_(self, sender):
         if self.app_delegate:
             self.app_delegate.connectADB_(sender)
 
+    @objc.IBAction
     def quitClicked_(self, sender):
         if self.app_delegate:
             self.app_delegate.quitApp_(sender)
