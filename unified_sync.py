@@ -1768,6 +1768,14 @@ class ApplicationBootstrap(NSObject):
         NSApplication.sharedApplication().terminate_(None)
 
 def main():
+    # Disable ADB's built-in mDNS to prevent duplicate device connections
+    os.environ["ADB_MDNS"] = "0"
+    try:
+        subprocess.run(["adb", "kill-server"], capture_output=True)
+        subprocess.run(["adb", "start-server"], capture_output=True)
+    except Exception as e:
+        print(f"[ADB Init Warning] Failed to restart ADB server: {e}")
+
     app = NSApplication.sharedApplication()
     # Set as accessory app (menu bar only, no Dock icon, no main window)
     from AppKit import NSApplicationActivationPolicyAccessory
