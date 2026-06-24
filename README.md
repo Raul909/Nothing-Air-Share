@@ -12,7 +12,7 @@
 
 *Featuring a custom, minimalist Nothing OS-inspired dot-matrix adaptive icon designed with transparency. It dynamically inverts between light and dark themes to fit perfectly in your browser or phone launcher! Showcasing open-source collaboration and creative interface design.*
 
-[![Download Latest APK](apk/download_latest.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+[![Download Latest APK](apk/download_latest.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
 ---
 
@@ -36,7 +36,7 @@
     │                    │                   │                      │
     │  NothingAirShare   │                   │  No app required —   │
     │  Companion App     │                   │  uses native AirDrop │
-    │  (APK v2.7.0)      │                   │  & Universal         │
+    │  (APK v2.7.1)      │                   │  & Universal         │
     │                    │                   │  Clipboard           │
     └────────────────────┘                   └──────────────────────┘
 ```
@@ -56,10 +56,10 @@
 ### Option A — Direct Download (Recommended)
 1. Download the latest version to your phone:
 
-   [![Download Latest APK](apk/download_latest.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+   [![Download Latest APK](apk/download_latest.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
    **Previous Versions:**
-   [![v2.7.0](apk/version_v2.7.0.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.7.0/NothingAirShare.apk) &nbsp; [![v2.6.0](apk/version_v2.6.0.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.6.0/NothingAirShare.apk) &nbsp; [![v2.5.0](apk/version_v2.5.0.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.5.0/NothingAirShare.apk) &nbsp; [![v2.4.0](apk/version_v2.4.0.svg?v=2.7.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.4.0/NothingAirShare.apk)
+   [![v2.7.1](apk/version_v2.7.1.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.7.1/NothingAirShare.apk) &nbsp; [![v2.7.0](apk/version_v2.7.0.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.7.0/NothingAirShare.apk) &nbsp; [![v2.6.0](apk/version_v2.6.0.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.6.0/NothingAirShare.apk) &nbsp; [![v2.5.0](apk/version_v2.5.0.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.5.0/NothingAirShare.apk)
 
 2. Open the downloaded file on your Nothing Phone
 3. Tap **Install** (you may need to allow "Install from unknown sources" for your browser)
@@ -113,30 +113,27 @@ A **Nothing Dot (`⚫️`)** will appear in your Mac's menu bar. Click it to ope
 ### First-Time Pairing (One-Time Setup)
 
 **On your Nothing Phone:**
-1. Go to **Settings > About phone > Software info**
-2. Tap **Build number** 7 times to enable Developer Options
-3. Go to **Settings > System > Developer options**
-4. Enable **Wireless Debugging** and tap into it
-5. Tap **Pair device with pairing code** — note the `IP:Port` and 6-digit code shown
+1. Go to **Settings > System > Developer options** (If you don't see it, go to *About phone > Software info* and tap *Build number* 7 times to enable it).
+2. Enable **Wireless Debugging** and tap into it.
+3. Tap **Pair device with pairing code** — note the `IP:Port` (e.g. `192.168.1.30:38291`) and the 6-digit Wi-Fi pairing code.
 
-**On your Mac (Terminal):**
-```bash
-adb pair <IP>:<PORT>
-# Replace <IP>:<PORT> with the address shown on your phone screen
-# Enter the 6-digit pairing code when prompted
-```
+**On your Mac (Visual App Flow):**
+1. Click the `⚫️` menu bar icon -> click **Connect ADB** at the bottom.
+2. Select **Pair Device**.
+3. Enter the `IP:Port` and the 6-digit pairing code shown on your phone, then click **Pair**.
+4. Once successfully paired, a notification will appear, and you can connect!
+
+*(Alternatively, you can run `adb pair <IP>:<PORT>` in your Mac Terminal and enter the code there).*
 
 ### Connecting & Handshake (After Pairing)
 
-With **v2.7.0**, connections are now fully automated and resilient to dynamic port changes:
-1. Make sure your Nothing Phone is paired with the Mac (see above).
-2. Toggle **Wireless Debugging** on your Nothing Phone.
-3. The macOS daemon (`unified_sync.py`) continuously listens for mDNS broadcasts from Android (`_adb-tls-connect._tcp.`). It will automatically discover your phone's randomized port and run `adb connect` in the background within seconds!
-4. The menu bar dot turns solid white, and the Popover panel updates to **Connected** along with battery level, charging status, and phone model.
-5. If automatic Bonjour discovery fails (e.g. on restricted enterprise Wi-Fi), you can still:
-   - Click the `⚫️` menu bar icon -> click **Connect ADB** at the bottom.
-   - Enter your phone's IP and port manually (shown on the phone's Wireless Debugging screen).
-   - Alternatively, toggle Wireless Debugging via the shortcut in the app settings (see below).
+Once paired, connecting is fully automated:
+1. Turn on **Wireless Debugging** on your Nothing Phone.
+2. Within seconds, the Mac app will automatically discover your phone's connection port and run `adb connect` in the background.
+3. The menu bar dot will turn solid white (`⚪️`), and the Popover panel will show **Connected**.
+
+*If automatic connection does not trigger, you can connect manually:*
+- Click `⚫️` -> click **Connect ADB** -> select **Connect** -> enter your phone's Wireless Debugging `IP:Port` (shown on the main Wireless Debugging screen).
 
 ---
 
