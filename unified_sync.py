@@ -1470,6 +1470,7 @@ class ApplicationBootstrap(NSObject):
         )
 
     # NSMenuDelegate: intercept menu open to show popover instead
+    @objc.signature(b'v@:@')
     def menuWillOpen_(self, menu):
         # Cancel the (empty) menu from actually appearing
         menu.cancelTracking()
