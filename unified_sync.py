@@ -48,6 +48,7 @@ os.makedirs(CONFIG_DIR, exist_ok=True)
 
 # Global sync state
 CURRENT_CLIPBOARD_CONTENT = ""
+sync_state_lock = threading.Lock()
 LAST_CHANGE_COUNT = -1
 app_delegate = None
 db = None
@@ -193,6 +194,7 @@ def mac_tcp_server_loop():
 
 def handle_mac_incoming_file(conn):
     try:
+        conn.settimeout(30.0)
         # 1. Read metadata length (4 bytes big-endian)
         len_bytes = conn.recv(4)
         if not len_bytes or len(len_bytes) < 4:
@@ -208,6 +210,15 @@ def handle_mac_incoming_file(conn):
         sender = metadata.get("senderName", "Unknown Device")
         filename = metadata.get("fileName", "file.bin")
         filesize = metadata.get("fileSize", 0)
+        provided_pin = metadata.get("pin", "")
+
+        config = load_config()
+        expected_pin = config.get("security_pin", "1234")
+        if provided_pin != expected_pin:
+            print("[P2P Receiver] Unauthorized transfer attempt (Invalid PIN)")
+            conn.send(bytes([0x02]))
+            conn.close()
+            return
 
         print(f"[P2P Receiver] Incoming file request from {sender}: {filename} ({filesize} bytes)")
 
@@ -267,15 +278,18 @@ def mac_send_file_to_peer(file_path, device_name, host, port):
     try:
         send_mac_notification("Nothing AirShare", f"Connecting to {device_name}...")
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(30.0)
         sock.connect((host, port))
 
+        config = load_config()
         # 1. Send metadata JSON
         filename = os.path.basename(file_path)
         filesize = os.path.getsize(file_path)
         metadata = {
             "senderName": "MacBook",
             "fileName": filename,
-            "fileSize": filesize
+            "fileSize": filesize,
+            "pin": config.get("security_pin", "1234")
         }
         meta_str = json.dumps(metadata)
         meta_bytes = meta_str.encode('utf-8')
@@ -533,52 +547,75 @@ class MacDropHandler(FileSystemEventHandler):
             print(f"[Error] Failed to push {filename}: {e}")
 
 # Mac Pasteboard Interfacing
-def get_mac_clipboard():
-    pb = NSPasteboard.generalPasteboard()
-    change_count = pb.changeCount()
-    
-    global LAST_CHANGE_COUNT
-    if change_count == LAST_CHANGE_COUNT:
-        return None, change_count
-    
-    LAST_CHANGE_COUNT = change_count
-    
-    # 1. Check for Files
-    if pb.availableTypeFromArray_([NSFilenamesPboardType]):
-        files = pb.propertyListForType_(NSFilenamesPboardType)
-        if files: return {"type": "file", "data": files[0]}, change_count
+class ClipboardHelper(NSObject):
+    def readClipboard_(self, context):
+        pb = NSPasteboard.generalPasteboard()
+        change_count = pb.changeCount()
         
-    # 2. Check for Images
-    if pb.availableTypeFromArray_([NSTIFFPboardType]):
-        image_data = pb.dataForType_(NSPNGFileType)
-        if not image_data:
-            image = NSImage.alloc().initWithPasteboard_(pb)
+        global LAST_CHANGE_COUNT
+        if change_count == LAST_CHANGE_COUNT:
+            context['result'] = (None, change_count)
+            return
+        
+        LAST_CHANGE_COUNT = change_count
+        
+        # 1. Check for Files
+        if pb.availableTypeFromArray_([NSFilenamesPboardType]):
+            files = pb.propertyListForType_(NSFilenamesPboardType)
+            if files:
+                context['result'] = ({"type": "file", "data": files[0]}, change_count)
+                return
+            
+        # 2. Check for Images
+        if pb.availableTypeFromArray_([NSTIFFPboardType]):
+            image_data = pb.dataForType_(NSPNGFileType)
+            if not image_data:
+                image = NSImage.alloc().initWithPasteboard_(pb)
+                if image:
+                    tiff_data = image.TIFFRepresentation()
+                    bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
+                    image_data = bitmap.representationUsingType_properties_(NSPNGFileType, None)
+            
+            if image_data:
+                temp_path = os.path.join(TEMP_DIR, f"clip_img_{int(time.time())}.png")
+                image_data.writeToFile_atomically_(temp_path, True)
+                context['result'] = ({"type": "image", "data": temp_path}, change_count)
+                return
+            
+        # 3. Check for Text
+        content = pb.stringForType_(NSStringPboardType)
+        if content:
+            context['result'] = ({"type": "text", "data": content}, change_count)
+            return
+            
+        context['result'] = (None, change_count)
+
+    def writeClipboard_(self, context):
+        type_ = context.get('type')
+        data = context.get('data')
+        pb = NSPasteboard.generalPasteboard()
+        pb.clearContents()
+        if type_ == "text":
+            pb.setString_forType_(data, NSStringPboardType)
+        elif type_ == "image":
+            image = NSImage.alloc().initByReferencingFile_(data)
             if image:
-                tiff_data = image.TIFFRepresentation()
-                bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
-                image_data = bitmap.representationUsingType_properties_(NSPNGFileType, None)
-        
-        if image_data:
-            temp_path = os.path.join(TEMP_DIR, f"clip_img_{int(time.time())}.png")
-            image_data.writeToFile_atomically_(temp_path, True)
-            return {"type": "image", "data": temp_path}, change_count
-        
-    # 3. Check for Text
-    content = pb.stringForType_(NSStringPboardType)
-    if content:
-        return {"type": "text", "data": content}, change_count
-        
-    return None, change_count
+                pb.writeObjects_([image])
+
+clip_helper = ClipboardHelper.alloc().init()
+
+def get_mac_clipboard():
+    ctx = {}
+    clip_helper.performSelectorOnMainThread_withObject_waitUntilDone_(
+        "readClipboard:", ctx, True
+    )
+    return ctx.get('result', (None, LAST_CHANGE_COUNT))
 
 def set_mac_clipboard(type, data):
-    pb = NSPasteboard.generalPasteboard()
-    pb.clearContents()
-    if type == "text":
-        pb.setString_forType_(data, NSStringPboardType)
-    elif type == "image":
-        image = NSImage.alloc().initByReferencingFile_(data)
-        if image:
-            pb.writeObjects_([image])
+    ctx = {'type': type, 'data': data}
+    clip_helper.performSelectorOnMainThread_withObject_waitUntilDone_(
+        "writeClipboard:", ctx, True
+    )
 
 def detect_helper_package():
     global HELPER_PACKAGE, HELPER_RECEIVER
@@ -695,10 +732,11 @@ def mac_clipboard_watcher():
             item, count = get_mac_clipboard()
             if item:
                 if item["type"] == "text":
-                    if item["data"] != CURRENT_CLIPBOARD_CONTENT:
-                        CURRENT_CLIPBOARD_CONTENT = item["data"]
-                        db.add_item(CURRENT_CLIPBOARD_CONTENT)
-                        threading.Thread(target=push_to_android_clipboard, args=(item,)).start()
+                    with sync_state_lock:
+                        if item["data"] != CURRENT_CLIPBOARD_CONTENT:
+                            CURRENT_CLIPBOARD_CONTENT = item["data"]
+                            db.add_item(CURRENT_CLIPBOARD_CONTENT)
+                            threading.Thread(target=push_to_android_clipboard, args=(item,)).start()
                 else:
                     threading.Thread(target=push_to_android_clipboard, args=(item,)).start()
         except Exception as e:
@@ -807,12 +845,13 @@ done
                         continue
                     try:
                         decoded_val = base64.b64decode(encoded_val).decode('utf-8')
-                        if decoded_val != CURRENT_CLIPBOARD_CONTENT:
-                            print(f"[Android] Clipboard changed: {decoded_val[:20]}...")
-                            CURRENT_CLIPBOARD_CONTENT = decoded_val
-                            db.add_item(CURRENT_CLIPBOARD_CONTENT)
-                            set_mac_clipboard("text", decoded_val)
-                            send_mac_notification("Nothing Clipboard", f"Copied: {decoded_val[:30]}")
+                        with sync_state_lock:
+                            if decoded_val != CURRENT_CLIPBOARD_CONTENT:
+                                print(f"[Android] Clipboard changed: {decoded_val[:20]}...")
+                                CURRENT_CLIPBOARD_CONTENT = decoded_val
+                                db.add_item(CURRENT_CLIPBOARD_CONTENT)
+                                set_mac_clipboard("text", decoded_val)
+                                send_mac_notification("Nothing Clipboard", f"Copied: {decoded_val[:30]}")
                     except Exception as e:
                         print(f"[Sync] Error decoding Android clipboard: {e}")
                         
@@ -1368,10 +1407,9 @@ class ApplicationBootstrap(NSObject):
         
         # Setup Status Bar
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
-        self.status_item.button().setAction_("statusItemClicked:")
-        self.status_item.button().setTarget_(self)
-        self.status_item.button().setImage_(create_template_dot(filled=False))
-        self.status_item.button().setImagePosition_(2) # NSImageLeft
+        button = self.status_item.button()
+        button.setImage_(create_template_dot(filled=False))
+        button.setImagePosition_(2) # NSImageLeft
         
         app_delegate = self
         self.connected = False
@@ -1382,10 +1420,19 @@ class ApplicationBootstrap(NSObject):
         # Create Popover and Popover ViewController
         self.popover = NSPopover.alloc().init()
         self.popover.setBehavior_(1) # NSPopoverBehaviorTransient
+        self.popover.setContentSize_((360, 600))
         
         self.popover_vc = NothingPopoverViewController.alloc().init()
         self.popover_vc.app_delegate = self
         self.popover.setContentViewController_(self.popover_vc)
+        
+        # Attach an empty NSMenu with delegate — the ONLY reliable way to detect
+        # status bar clicks in pyobjc on modern macOS. Button setAction_/setTarget_
+        # does NOT work because pyobjc processes don't receive status bar button
+        # action messages. Instead, we intercept menuWillOpen_ to show our popover.
+        self._status_menu = NSMenu.alloc().init()
+        self._status_menu.setDelegate_(self)
+        self.status_item.setMenu_(self._status_menu)
         
         # Build default menu UI
         self.updateUIOnMainThread()
@@ -1417,18 +1464,30 @@ class ApplicationBootstrap(NSObject):
             "updateUIOnMainThread", None, False
         )
 
-    def statusItemClicked_(self, sender):
+    # NSMenuDelegate: intercept menu open to show popover instead
+    def menuWillOpen_(self, menu):
+        # Cancel the (empty) menu from actually appearing
+        menu.cancelTracking()
+        # Toggle the popover
+        self._togglePopover()
+
+    def _togglePopover(self):
         button = self.status_item.button()
         if self.popover.isShown():
-            self.popover.performClose_(sender)
+            self.popover.performClose_(None)
         else:
+            # Activate the app so the popover can become key window
+            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
             self.popover_vc.refresh_data()
             self.popover.showRelativeToRect_ofView_preferredEdge_(
                 button.bounds(),
                 button,
                 1 # NSMinYEdge
             )
-            self.popover.contentViewController().view().window().makeKeyWindow()
+            try:
+                self.popover.contentViewController().view().window().makeKeyWindow()
+            except Exception:
+                pass
 
     def updateUIOnMainThread(self):
         if self.connected:
@@ -1558,6 +1617,9 @@ class ApplicationBootstrap(NSObject):
 
 def main():
     app = NSApplication.sharedApplication()
+    # Set as accessory app (menu bar only, no Dock icon, no main window)
+    from AppKit import NSApplicationActivationPolicyAccessory
+    app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
     delegate = ApplicationBootstrap.alloc().init()
     app.setDelegate_(delegate)
     app.run()

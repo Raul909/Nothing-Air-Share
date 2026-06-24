@@ -15,6 +15,7 @@ import kotlin.concurrent.thread
 
 object FileTransferService {
     var port: Int = 53317
+    var securityPin: String = "1234"
     private var serverSocket: ServerSocket? = null
     private var isRunning = false
 
@@ -29,15 +30,22 @@ object FileTransferService {
         
         thread {
             try {
-                serverSocket = ServerSocket(port)
+                serverSocket = ServerSocket(port).apply {
+                    reuseAddress = true
+                    soTimeout = 1000
+                }
                 Log.d("TransferService", "TCP Server listening on port $port")
                 
                 while (isRunning) {
-                    val clientSocket = serverSocket?.accept()
-                    if (clientSocket != null) {
-                        thread {
-                            handleIncomingConnection(clientSocket)
+                    try {
+                        val clientSocket = serverSocket?.accept()
+                        if (clientSocket != null) {
+                            thread {
+                                handleIncomingConnection(clientSocket)
+                            }
                         }
+                    } catch (e: java.net.SocketTimeoutException) {
+                        // Expected, allows loop to check isRunning
                     }
                 }
             } catch (e: Exception) {
@@ -57,6 +65,7 @@ object FileTransferService {
 
     private fun handleIncomingConnection(socket: Socket) {
         try {
+            socket.soTimeout = 30000
             val dis = DataInputStream(socket.getInputStream())
             val dos = DataOutputStream(socket.getOutputStream())
 
@@ -76,6 +85,16 @@ object FileTransferService {
             val senderName = metadata.optString("senderName", "Unknown Device")
             val fileName = metadata.optString("fileName", "file.bin")
             val fileSize = metadata.optLong("fileSize", 0L)
+            val providedPin = metadata.optString("pin", "")
+
+            if (providedPin != securityPin) {
+                Log.e("TransferService", "Unauthorized transfer attempt (Invalid PIN)")
+                updateStatus("Unauthorized attempt rejected")
+                dos.writeByte(0x02) // Reject
+                dos.flush()
+                socket.close()
+                return
+            }
 
             Log.d("TransferService", "Incoming transfer: $fileName ($fileSize bytes) from $senderName")
             updateStatus("Prompting for: $fileName")
@@ -173,6 +192,7 @@ object FileTransferService {
             try {
                 updateStatus("Connecting to receiver...")
                 val socket = Socket(host, port)
+                socket.soTimeout = 30000
                 val dis = DataInputStream(socket.getInputStream())
                 val dos = DataOutputStream(socket.getOutputStream())
 
@@ -181,6 +201,7 @@ object FileTransferService {
                     put("senderName", android.os.Build.MODEL)
                     put("fileName", file.name)
                     put("fileSize", file.length())
+                    put("pin", securityPin)
                 }
                 val metaBytes = metadata.toString().toByteArray(Charsets.UTF_8)
 

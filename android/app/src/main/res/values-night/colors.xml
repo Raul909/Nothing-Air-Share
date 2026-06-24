@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="black">#000000</color> <!-- Root background in dark theme -->
-    <color name="white">#FFFFFF</color> <!-- Primary text/foreground in dark theme -->
+    <color name="background">#000000</color> <!-- Root background in dark theme -->
+    <color name="foreground">#FFFFFF</color> <!-- Primary text/foreground in dark theme -->
     <color name="nothing_red">#D32F2F</color>
     <color name="nothing_red_dark">#B71C1C</color>
     <color name="nothing_red_tint">#1AD32F2F</color>

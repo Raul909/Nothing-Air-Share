@@ -2,6 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.nothing.airshare">
 
+    <permission
+        android:name="com.nothing.airshare.permission.SYNC_COMMAND"
+        android:protectionLevel="signature" />
+    
+    <uses-permission android:name="com.nothing.airshare.permission.SYNC_COMMAND" />
+
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -37,6 +43,7 @@
 
         <receiver
             android:name=".ClipboardReceiver"
+            android:permission="com.nothing.airshare.permission.SYNC_COMMAND"
             android:exported="true">
             <intent-filter>
                 <action android:name="clipper.get" />

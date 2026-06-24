@@ -172,12 +172,15 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         val savedClipboardSync = prefs.getBoolean("pref_clipboard_sync", true)
         val savedFindPhone = prefs.getBoolean("pref_find_phone", true)
         val savedRemoteInput = prefs.getBoolean("pref_remote_input", true)
+        val savedPin = prefs.getString("pref_security_pin", "1234") ?: "1234"
         val savedFontSize = prefs.getString("pref_font_size", "medium") ?: "medium"
         val savedTheme = prefs.getString("pref_theme", "system") ?: "system"
         
         binding.etMacIp.setText(savedMacIp)
         binding.etMacPort.setText(savedMacPort.toString())
         binding.etLocalPort.setText(savedLocalPort.toString())
+        binding.etSecurityPin.setText(savedPin)
+        FileTransferService.securityPin = savedPin
         binding.switchClipboardSync.isChecked = savedClipboardSync
         binding.switchFindPhone.isChecked = savedFindPhone
         binding.switchRemoteInput.isChecked = savedRemoteInput
@@ -218,6 +221,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
 
             val macPort = macPortStr.toIntOrNull() ?: 53318
             val localPort = localPortStr.toIntOrNull() ?: 53317
+            val pin = binding.etSecurityPin.text.toString().trim()
             val clipboardSync = binding.switchClipboardSync.isChecked
             val findPhone = binding.switchFindPhone.isChecked
             val remoteInput = binding.switchRemoteInput.isChecked
@@ -237,6 +241,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
                 putString("mac_ip", macIp)
                 putInt("mac_port", macPort)
                 putInt("local_port", localPort)
+                putString("pref_security_pin", pin)
                 putBoolean("pref_clipboard_sync", clipboardSync)
                 putBoolean("pref_find_phone", findPhone)
                 putBoolean("pref_remote_input", remoteInput)
@@ -244,6 +249,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
                 putString("pref_theme", selectedTheme)
                 apply()
             }
+            FileTransferService.securityPin = pin
             applyFontSettings()
 
             val mode = when (selectedTheme) {
@@ -590,7 +596,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         val prefs = getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
         val fontSize = prefs.getString("pref_font_size", "medium") ?: "medium"
         val scale = when (fontSize) {
-            "small" -> 0.85f
+            "small" -> 0.90f
             "large" -> 1.20f
             else -> 1.00f
         }
@@ -600,19 +606,22 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         binding.tvStatusLabel.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 18f * scale)
         binding.tvStatus.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
 
-        binding.tvSendFilesTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
-        binding.tvSendFilesDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 9f * scale)
-        binding.tvClipboardTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
-        binding.tvClipboardDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 9f * scale)
-        binding.tvRemoteInputTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
-        binding.tvRemoteInputDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 9f * scale)
-        binding.tvCardMediaTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
-        binding.tvCardMediaDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 9f * scale)
+        // Card titles — 15sp base
+        binding.tvSendFilesTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f * scale)
+        binding.tvClipboardTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f * scale)
+        binding.tvRemoteInputTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f * scale)
+        binding.tvCardMediaTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f * scale)
+
+        // Card descriptions — 12sp base
+        binding.tvSendFilesDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f * scale)
+        binding.tvClipboardDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f * scale)
+        binding.tvRemoteInputDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f * scale)
+        binding.tvCardMediaDesc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f * scale)
 
         binding.tvDrawerTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 28f * scale)
         binding.tvDrawerSubtitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
         binding.tvDeviceName.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f * scale)
-        binding.tvDevicesHeader.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f * scale)
+        binding.tvDevicesHeader.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f * scale)
         binding.tvNoDevices.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * scale)
         binding.drawerSettings.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
         binding.drawerAbout.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)

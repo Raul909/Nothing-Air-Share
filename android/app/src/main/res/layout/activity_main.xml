@@ -6,7 +6,7 @@
     android:id="@+id/drawerLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/black"
+    android:background="@color/background"
     tools:context=".MainActivity">
 
     <!-- 1st Child: Main Content Area -->
@@ -27,7 +27,7 @@
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:paddingHorizontal="20dp"
-                android:background="@color/black">
+                android:background="@color/background">
 
                 <ImageView
                     android:id="@+id/btnMenu"
@@ -52,7 +52,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/title_nothing"
-                        android:textColor="@color/white"
+                        android:textColor="@color/foreground"
                         android:textSize="24sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/ndot55" />
@@ -118,7 +118,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/status_active"
-                                android:textColor="@color/white"
+                                android:textColor="@color/foreground"
                                 android:textSize="18sp"
                                 android:textStyle="bold"
                                 android:fontFamily="@font/ndot57" />
@@ -190,7 +190,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_send_files"
-                                android:textColor="@color/white"
+                                android:textColor="@color/foreground"
                                 android:textSize="13sp"
                                 android:fontFamily="@font/ndot57" />
 
@@ -238,7 +238,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_clipboard"
-                                android:textColor="@color/white"
+                                android:textColor="@color/foreground"
                                 android:textSize="13sp"
                                 android:fontFamily="@font/ndot57" />
 
@@ -290,7 +290,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_remote_input"
-                                android:textColor="@color/white"
+                                android:textColor="@color/foreground"
                                 android:textSize="13sp"
                                 android:fontFamily="@font/ndot57" />
 
@@ -338,7 +338,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/card_media"
-                                android:textColor="@color/white"
+                                android:textColor="@color/foreground"
                                 android:textSize="13sp"
                                 android:fontFamily="@font/ndot57" />
 
@@ -370,7 +370,7 @@
                             android:layout_height="wrap_content"
                             android:minHeight="48dp"
                             android:hint="@string/hint_clipboard"
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:textColorHint="@color/text_tertiary"
                             android:background="@drawable/input_bg"
                             android:padding="12dp"
@@ -390,8 +390,8 @@
                                 android:layout_weight="1"
                                 android:text="@string/btn_copy"
                                 android:background="@drawable/btn_white"
-                                app:backgroundTint="@color/white"
-                                android:textColor="@color/black"
+                                app:backgroundTint="@color/foreground"
+                                android:textColor="@color/background"
                                 android:fontFamily="@font/ndot57"
                                 android:textSize="12sp"
                                 android:layout_marginEnd="6dp" />
@@ -404,7 +404,7 @@
                                 android:text="@string/btn_paste"
                                 android:background="@drawable/btn_dark"
                                 app:backgroundTint="@color/btn_dark_bg"
-                                android:textColor="@color/white"
+                                android:textColor="@color/foreground"
                                 android:fontFamily="@font/ndot57"
                                 android:textSize="12sp"
                                 android:layout_marginStart="6dp" />
@@ -436,7 +436,7 @@
             android:id="@+id/overlayTrackpad"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="@color/black"
+            android:background="@color/background"
             android:visibility="gone"
             tools:visibility="gone">
 
@@ -468,7 +468,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/card_remote_input"
-                        android:textColor="@color/white"
+                        android:textColor="@color/foreground"
                         android:textSize="18sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/ndot57"
@@ -517,7 +517,7 @@
             android:id="@+id/overlayMedia"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="@color/black"
+            android:background="@color/background"
             android:visibility="gone"
             tools:visibility="gone">
 
@@ -549,7 +549,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/card_media"
-                        android:textColor="@color/white"
+                        android:textColor="@color/foreground"
                         android:textSize="18sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/ndot57"
@@ -575,7 +575,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/media_awaiting"
-                    android:textColor="@color/white"
+                    android:textColor="@color/foreground"
                     android:textSize="16sp"
                     android:fontFamily="@font/letteramono"
                     android:layout_gravity="center_horizontal"
@@ -601,7 +601,7 @@
                         android:layout_height="64dp"
                         android:text="⏮"
                         android:textSize="32sp"
-                        android:textColor="@color/white"
+                        android:textColor="@color/foreground"
                         android:gravity="center"
                         android:clickable="true"
                         android:focusable="true"
@@ -626,7 +626,7 @@
                         android:layout_height="64dp"
                         android:text="⏭"
                         android:textSize="32sp"
-                        android:textColor="@color/white"
+                        android:textColor="@color/foreground"
                         android:gravity="center"
                         android:clickable="true"
                         android:focusable="true"
@@ -645,7 +645,7 @@
             android:id="@+id/overlaySettings"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="@color/black"
+            android:background="@color/background"
             android:visibility="gone">
 
             <LinearLayout
@@ -676,7 +676,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="SETTINGS"
-                        android:textColor="@color/white"
+                        android:textColor="@color/foreground"
                         android:textSize="18sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/ndot57"
@@ -719,7 +719,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="48dp"
                             android:background="@drawable/input_bg"
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:textSize="14sp"
                             android:fontFamily="@font/letteramono"
                             android:paddingHorizontal="16dp"
@@ -742,7 +742,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="48dp"
                             android:background="@drawable/input_bg"
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:textSize="14sp"
                             android:fontFamily="@font/letteramono"
                             android:paddingHorizontal="16dp"
@@ -750,6 +750,29 @@
                             android:textColorHint="@color/text_tertiary"
                             android:layout_marginTop="6dp"
                             android:inputType="number" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Security PIN (required for connection):"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp"
+                            android:fontFamily="@font/letteramono"
+                            android:layout_marginTop="16dp" />
+
+                        <EditText
+                            android:id="@+id/etSecurityPin"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:background="@drawable/input_bg"
+                            android:textColor="@color/foreground"
+                            android:textSize="14sp"
+                            android:fontFamily="@font/letteramono"
+                            android:paddingHorizontal="16dp"
+                            android:hint="e.g. 1234"
+                            android:textColorHint="@color/text_tertiary"
+                            android:layout_marginTop="6dp"
+                            android:inputType="numberPassword" />
 
                         <View
                             android:layout_width="match_parent"
@@ -781,7 +804,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="48dp"
                             android:background="@drawable/input_bg"
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:textSize="14sp"
                             android:fontFamily="@font/letteramono"
                             android:paddingHorizontal="16dp"
@@ -819,8 +842,8 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1.2"
                                 android:text="SYSTEM"
-                                android:textColor="@color/white"
-                                android:buttonTint="@color/white"
+                                android:textColor="@color/foreground"
+                                android:buttonTint="@color/foreground"
                                 android:fontFamily="@font/letteramono"
                                 android:textSize="11sp" />
 
@@ -830,8 +853,8 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:text="LIGHT"
-                                android:textColor="@color/white"
-                                android:buttonTint="@color/white"
+                                android:textColor="@color/foreground"
+                                android:buttonTint="@color/foreground"
                                 android:fontFamily="@font/letteramono"
                                 android:textSize="11sp" />
 
@@ -841,8 +864,8 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:text="DARK"
-                                android:textColor="@color/white"
-                                android:buttonTint="@color/white"
+                                android:textColor="@color/foreground"
+                                android:buttonTint="@color/foreground"
                                 android:fontFamily="@font/letteramono"
                                 android:textSize="11sp" />
                         </RadioGroup>
@@ -876,8 +899,8 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:text="SMALL"
-                                android:textColor="@color/white"
-                                android:buttonTint="@color/white"
+                                android:textColor="@color/foreground"
+                                android:buttonTint="@color/foreground"
                                 android:fontFamily="@font/letteramono"
                                 android:textSize="12sp" />
 
@@ -887,8 +910,8 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:text="MEDIUM"
-                                android:textColor="@color/white"
-                                android:buttonTint="@color/white"
+                                android:textColor="@color/foreground"
+                                android:buttonTint="@color/foreground"
                                 android:fontFamily="@font/letteramono"
                                 android:textSize="12sp"
                                 android:checked="true" />
@@ -899,8 +922,8 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:text="LARGE"
-                                android:textColor="@color/white"
-                                android:buttonTint="@color/white"
+                                android:textColor="@color/foreground"
+                                android:buttonTint="@color/foreground"
                                 android:fontFamily="@font/letteramono"
                                 android:textSize="12sp" />
                         </RadioGroup>
@@ -926,10 +949,10 @@
                             android:layout_width="match_parent"
                             android:layout_height="48dp"
                             android:text="Clipboard Sync"
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:fontFamily="@font/letteramono"
                             android:checked="true"
-                            android:thumbTint="@color/white"
+                            android:thumbTint="@color/foreground"
                             android:trackTint="@color/nothing_red_tint" />
 
                         <androidx.appcompat.widget.SwitchCompat
@@ -937,10 +960,10 @@
                             android:layout_width="match_parent"
                             android:layout_height="48dp"
                             android:text="Find My Phone (Ring)"
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:fontFamily="@font/letteramono"
                             android:checked="true"
-                            android:thumbTint="@color/white"
+                            android:thumbTint="@color/foreground"
                             android:trackTint="@color/nothing_red_tint" />
 
                         <androidx.appcompat.widget.SwitchCompat
@@ -948,10 +971,10 @@
                             android:layout_width="match_parent"
                             android:layout_height="48dp"
                             android:text="Remote Trackpad Input"
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:fontFamily="@font/letteramono"
                             android:checked="true"
-                            android:thumbTint="@color/white"
+                            android:thumbTint="@color/foreground"
                             android:trackTint="@color/nothing_red_tint" />
 
                         <View
@@ -977,7 +1000,7 @@
                             android:background="@drawable/btn_dark"
                             app:backgroundTint="@color/btn_dark_bg"
                             android:text="⚙ WIRELESS DEBUGGING"
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:textSize="14sp"
                             android:fontFamily="@font/ndot57"
                             android:layout_marginTop="12dp"
@@ -994,7 +1017,7 @@
                             android:layout_height="48dp"
                             android:background="@drawable/btn_white"
                             android:text="SAVE SETTINGS"
-                            android:textColor="@color/black"
+                            android:textColor="@color/background"
                             android:textSize="14sp"
                             android:fontFamily="@font/ndot57"
                             android:layout_gravity="center_horizontal" />
@@ -1009,7 +1032,7 @@
             android:id="@+id/overlayAbout"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="@color/black"
+            android:background="@color/background"
             android:visibility="gone">
 
             <LinearLayout
@@ -1040,7 +1063,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="ABOUT"
-                        android:textColor="@color/white"
+                        android:textColor="@color/foreground"
                         android:textSize="18sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/ndot57"
@@ -1064,7 +1087,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="● NOTHING"
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:textSize="36sp"
                             android:fontFamily="@font/ndot55"
                             android:layout_marginTop="24dp" />
@@ -1090,7 +1113,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="Seamless file sharing and bidirectional clipboard sync between Android (Nothing OS), macOS, and iOS—without intermediate custom iOS apps."
-                            android:textColor="@color/white"
+                            android:textColor="@color/foreground"
                             android:textSize="14sp"
                             android:fontFamily="@font/letteramono"
                             android:layout_marginTop="32dp"
@@ -1154,7 +1177,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/title_nothing"
-                android:textColor="@color/white"
+                android:textColor="@color/foreground"
                 android:textSize="28sp"
                 android:textStyle="bold"
                 android:fontFamily="@font/ndot55" />
@@ -1240,7 +1263,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="⚙  SETTINGS"
-            android:textColor="@color/white"
+            android:textColor="@color/foreground"
             android:textSize="14sp"
             android:fontFamily="@font/ndot57"
             android:padding="20dp"
@@ -1253,7 +1276,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="ℹ  ABOUT"
-            android:textColor="@color/white"
+            android:textColor="@color/foreground"
             android:textSize="14sp"
             android:fontFamily="@font/ndot57"
             android:padding="20dp"
