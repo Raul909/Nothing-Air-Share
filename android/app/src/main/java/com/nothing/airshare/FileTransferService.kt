@@ -207,68 +207,6 @@ object FileTransferService {
         }
     }
 
-    fun sendFile(file: File, host: InetAddress, port: Int) {
-        thread {
-            try {
-                updateStatus("Connecting to receiver...")
-                val socket = Socket(host, port)
-                socket.soTimeout = 30000
-                val dis = DataInputStream(socket.getInputStream())
-                val dos = DataOutputStream(socket.getOutputStream())
-
-                // 1. Prepare Metadata JSON
-                val metadata = JSONObject().apply {
-                    put("senderName", android.os.Build.MODEL)
-                    put("fileName", file.name)
-                    put("fileSize", file.length())
-                    put("pin", securityPin)
-                }
-                val metaBytes = metadata.toString().toByteArray(Charsets.UTF_8)
-
-                // 2. Send Metadata length + JSON
-                dos.writeInt(metaBytes.size)
-                dos.write(metaBytes)
-                dos.flush()
-
-                updateStatus("Waiting for approval...")
-
-                // 3. Wait for Accept/Reject code
-                val response = dis.readByte().toInt()
-                if (response == 0x01) {
-                    updateStatus("Sending: ${file.name}")
-                    
-                    // 4. Stream file bytes
-                    val fis = FileInputStream(file)
-                    val buffer = ByteArray(262144)  // 256KB buffer (L5)
-                    var bytesRead: Int
-                    var totalBytesSent = 0L
-                    val totalSize = file.length()
-
-                    while (fis.read(buffer).also { bytesRead = it } != -1) {
-                        dos.write(buffer, 0, bytesRead)
-                        totalBytesSent += bytesRead
-                        val progress = if (totalSize > 0) totalBytesSent.toDouble() / totalSize else 0.0
-                        progressHandler?.invoke(progress)
-                    }
-
-                    dos.flush()
-                    fis.close()
-                    Log.d("TransferService", "File sent successfully!")
-                    updateStatus("Sent: ${file.name}")
-                    progressHandler?.invoke(1.0)
-                } else {
-                    Log.d("TransferService", "Receiver rejected the file.")
-                    updateStatus("Receiver rejected transfer")
-                }
-
-                socket.close()
-            } catch (e: Exception) {
-                Log.e("TransferService", "Send file error: ${e.message}")
-                updateStatus("Send failed: ${e.localizedMessage}")
-            }
-        }
-    }
-
     private fun updateStatus(msg: String) {
         statusHandler?.invoke(msg)
     }

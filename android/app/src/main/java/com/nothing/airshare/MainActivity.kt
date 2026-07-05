@@ -29,11 +29,6 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.InetAddress
-import android.content.BroadcastReceiver
-import java.net.Socket
-import org.json.JSONObject
-import kotlin.concurrent.thread
-import android.util.Log
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -562,25 +557,6 @@ class MainActivity : AppCompatActivity() {
             row.addView(tvFileName)
             binding.llDevicesContainer.addView(row)
         }
-    }
-
-    private fun getFileFromUri(context: Context, uri: Uri): File {
-        val parcelFileDescriptor = context.contentResolver.openFileDescriptor(uri, "r")
-        val fileDescriptor = parcelFileDescriptor?.fileDescriptor ?: throw Exception("Null file descriptor")
-        val inputStream = FileInputStream(fileDescriptor)
-        
-        val tempFile = File(context.cacheDir, getFileName(context, uri))
-        val outputStream = FileOutputStream(tempFile)
-        val buffer = ByteArray(262144)  // 256KB buffer (L5)
-        var bytesRead: Int
-        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-            outputStream.write(buffer, 0, bytesRead)
-        }
-        
-        inputStream.close()
-        outputStream.close()
-        parcelFileDescriptor.close()
-        return tempFile
     }
 
     private fun getFileName(context: Context, uri: Uri): String {
