@@ -152,6 +152,10 @@ ADB_REVERSE_PORT = 53319
 PROTO_VERSION = 1
 HEARTBEAT_INTERVAL = 15.0   # seconds between pings on an idle session
 HEARTBEAT_TIMEOUT = 35.0    # drop a session with no traffic for this long
+# ADB fallback reconnect: give up on the cached address after this many tries
+# (the wireless-debugging port rotates, so a stale address never recovers). Once
+# exhausted we wait for Bonjour to re-discover the phone and trigger a fresh connect.
+MAX_ADB_RECONNECT_ATTEMPTS = 5
 
 # Ensure directories exist
 os.makedirs(DROP_ZONE_MAC, exist_ok=True)
@@ -1010,8 +1014,8 @@ def run_adb_connect(address):
         config["last_address"] = address
         save_config(config)
         # Setup reverse port forward for real-time cursor/media commands
-        subprocess.run(["adb", "reverse", "tcp:53319", "tcp:53317"], capture_output=True)
-        print("[ADB] Setup reverse port forward tcp:53319 -> tcp:53317")
+        subprocess.run(["adb", "reverse", f"tcp:{ADB_REVERSE_PORT}", f"tcp:{LAN_PORT}"], capture_output=True)
+        print(f"[ADB] Setup reverse port forward tcp:{ADB_REVERSE_PORT} -> tcp:{LAN_PORT}")
 
 def run_adb_connect_safe(address):
     """Thread-safe ADB connect that prevents race conditions between
@@ -1142,36 +1146,44 @@ while true; do
 done
 """
     
+    reconnect_attempts = 0
     while True:
         try:
             # Check if any ADB devices are connected
             device_check = subprocess.run(["adb", "devices"], capture_output=True, text=True)
             lines = device_check.stdout.strip().split('\n')
-            
+
             if len(lines) < 2 or not lines[1].strip() or "device" not in lines[1]:
                 # A live LAN session already carries clipboard/DND/file over TCP —
                 # don't churn ADB reconnects (this was the source of the log spam).
                 if has_live_session():
+                    reconnect_attempts = 0
                     time.sleep(10)
                     continue
-                # Try auto-connecting to saved address using safe lock (C3)
+                # Try the saved address with capped exponential backoff, then give
+                # up (the wireless-debugging port rotates, so a stale address will
+                # never recover — Bonjour re-discovery triggers a fresh connect).
                 config = load_config()
-                if "last_address" in config:
-                    print(f"[ADB] Trying auto-reconnect to {config['last_address']}...")
+                if "last_address" in config and reconnect_attempts < MAX_ADB_RECONNECT_ATTEMPTS:
+                    reconnect_attempts += 1
+                    backoff = min(10 * (2 ** (reconnect_attempts - 1)), 120)
+                    print(f"[ADB] Auto-reconnect {reconnect_attempts}/{MAX_ADB_RECONNECT_ATTEMPTS} "
+                          f"to {config['last_address']} (next retry in {backoff}s)")
                     run_adb_connect_safe(config["last_address"])
-                    time.sleep(10)
+                    time.sleep(backoff)
                     continue
 
                 if app_delegate and not has_live_session():
                     app_delegate.set_connected(False)
-                time.sleep(10)
+                time.sleep(15)
                 continue
-            
+
+            reconnect_attempts = 0
             if app_delegate:
                 try:
                     # Setup reverse port forward for real-time cursor/media commands
-                    subprocess.run(["adb", "reverse", "tcp:53319", "tcp:53317"], capture_output=True)
-                    print("[ADB] Setup reverse port forward tcp:53319 -> tcp:53317")
+                    subprocess.run(["adb", "reverse", f"tcp:{ADB_REVERSE_PORT}", f"tcp:{LAN_PORT}"], capture_output=True)
+                    print(f"[ADB] Setup reverse port forward tcp:{ADB_REVERSE_PORT} -> tcp:{LAN_PORT}")
                     model_res = subprocess.run(["adb", "shell", "getprop ro.product.model"], capture_output=True, text=True, timeout=3)
                     app_delegate.device_model = model_res.stdout.strip() if (model_res.returncode == 0 and model_res.stdout.strip()) else "Nothing Phone"
                 except:
