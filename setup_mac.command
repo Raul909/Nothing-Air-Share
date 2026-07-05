@@ -61,15 +61,14 @@ if ! python3 -c "import objc, watchdog, PIL, PyInstaller" >/dev/null 2>&1; then
 fi
 
 # --- 4. Build and Install App ------------------------------------------------
-if [ ! -d "/Applications/Nothing AirShare.app" ]; then
-  echo "→ Building standalone macOS App..."
-  pyinstaller --noconsole --name "Nothing AirShare" unified_sync.py >/dev/null 2>&1
-  plutil -insert LSUIElement -bool YES "dist/Nothing AirShare.app/Contents/Info.plist" >/dev/null 2>&1
-  
-  echo "→ Installing to /Applications..."
-  cp -R "dist/Nothing AirShare.app" "/Applications/"
-  rm -rf build dist "Nothing AirShare.spec"
-fi
+echo "→ Building standalone macOS App..."
+pyinstaller --noconsole --name "Nothing AirShare" unified_sync.py >/dev/null 2>&1
+plutil -insert LSUIElement -bool YES "dist/Nothing AirShare.app/Contents/Info.plist" >/dev/null 2>&1
+
+echo "→ Installing to /Applications..."
+rm -rf "/Applications/Nothing AirShare.app"
+cp -R "dist/Nothing AirShare.app" "/Applications/"
+rm -rf build dist "Nothing AirShare.spec"
 
 # --- 5. Launch ---------------------------------------------------------------
 echo ""
