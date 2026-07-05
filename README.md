@@ -12,7 +12,14 @@
 
 *Featuring a custom, minimalist Nothing OS-inspired dot-matrix adaptive icon designed with transparency. It dynamically inverts between light and dark themes to fit perfectly in your browser or phone launcher! Showcasing open-source collaboration and creative interface design.*
 
-[![Download Latest APK](apk/download_latest.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+[![Download Latest APK](apk/download_latest.svg?v=2.8.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+
+<p align="center">
+  <a href="https://github.com/Raul909/Nothing-Air-Share/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/Raul909/Nothing-Air-Share?style=for-the-badge&color=e60012&label=latest"></a>
+  <img alt="Downloads" src="https://img.shields.io/github/downloads/Raul909/Nothing-Air-Share/total?style=for-the-badge&color=000000&label=downloads">
+  <img alt="Platform" src="https://img.shields.io/badge/for-Nothing%20OS%20%C2%B7%20macOS%20%C2%B7%20iOS-000000?style=for-the-badge">
+  <a href="https://github.com/Raul909/Nothing-Air-Share/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Raul909/Nothing-Air-Share?style=for-the-badge&color=e60012"></a>
+</p>
 
 ---
 
@@ -36,7 +43,7 @@
     │                    │                   │                      │
     │  NothingAirShare   │                   │  No app required —   │
     │  Companion App     │                   │  uses native AirDrop │
-    │  (APK v2.7.1)      │                   │  & Universal         │
+    │  (APK v2.8.0)      │                   │  & Universal         │
     │                    │                   │  Clipboard           │
     └────────────────────┘                   └──────────────────────┘
 ```
@@ -56,10 +63,10 @@
 ### Option A — Direct Download (Recommended)
 1. Download the latest version to your phone:
 
-   [![Download Latest APK](apk/download_latest.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+   [![Download Latest APK](apk/download_latest.svg?v=2.8.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
-   **Previous Versions:**
-   [![v2.7.1](apk/version_v2.7.1.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.7.1/NothingAirShare.apk) &nbsp; [![v2.7.0](apk/version_v2.7.0.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.7.0/NothingAirShare.apk) &nbsp; [![v2.6.0](apk/version_v2.6.0.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.6.0/NothingAirShare.apk) &nbsp; [![v2.5.0](apk/version_v2.5.0.svg?v=2.7.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.5.0/NothingAirShare.apk)
+   **Previous Version:**
+   [![v2.7.1](apk/version_v2.7.1.svg?v=2.8.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.7.1/NothingAirShare.apk)
 
 2. Open the downloaded file on your Nothing Phone
 3. Tap **Install** (you may need to allow "Install from unknown sources" for your browser)
@@ -143,7 +150,7 @@ Once paired, connecting is fully automated:
 | Direction | How |
 |---|---|
 | **Mac → Phone** | Copy anything on your Mac (`Cmd+C`) — it's instantly pushed to your phone's clipboard. Alternatively, click the **Clipboard** card in the Mac Popover to force sync. |
-| **Phone → Mac** | Copy text on your phone — it appears on your Mac clipboard within 1 second |
+| **Phone → Mac** | Copy text on your phone — it appears on your Mac clipboard within ~600ms |
 | **iPhone → Phone** | Copy on iPhone → Universal Clipboard syncs to Mac → Mac forwards to phone |
 | **Clipboard History** | Click `⚫️` menu bar → View **Clipboard History** list in the popover → click any of the last 3 items to restore and push to phone |
 
@@ -235,6 +242,36 @@ Press `Ctrl+C` to stop. The `⚫️` dot disappears from the menu bar.
 
 > **Why not a `.dmg`?**
 > The macOS component uses `pyobjc` (Python-to-Cocoa bridge) and requires `adb` (Android platform tools). Bundling these into a standalone `.app` with PyInstaller/py2app produces a 200+ MB package that macOS Gatekeeper blocks without an Apple Developer Certificate ($99/yr for code-signing). The LaunchAgent approach is lighter, more transparent, and auto-updates when you `git pull`.
+
+---
+
+## 📋 Changelog
+
+### v2.8.0 — Connection Stability, Menu Bar Sync & Latency Optimization
+
+**Connection Stability**
+- Fixed random socket drops caused by incomplete `recv()` reads — added reliable `recv_exact()` helper
+- Android command socket (trackpad/media) now auto-reconnects with exponential backoff (3 retries)
+- Added connection state lock to prevent race conditions between Bonjour auto-discovery and ADB monitor
+- File transfer timeout now scales dynamically with file size (no more timeouts on large files)
+- Android TCP server retries binding with backoff if port is occupied
+- Socket errors are now surfaced to the Android UI with automatic reconnection
+
+**Menu Bar Popover**
+- Popover now auto-refreshes every 2 seconds while open (clipboard history, devices, battery update live)
+- Clipboard history shows 3 items (was 2) — matches documentation
+- Nearby devices shows up to 3 (was 2)
+- Fixed memory leak from button maps growing without bound on each refresh
+- Battery display no longer flickers from duplicate updates
+
+**Latency Optimization**
+- Phone→Mac clipboard sync reduced from ~2s to ~600ms (3.3× faster)
+- Trackpad input uses binary protocol (9 bytes vs ~50 bytes JSON) with 16ms move coalescing for ~60fps
+- `TCP_NODELAY` enabled on Mac TCP server — eliminates up to 200ms Nagle buffering
+- File transfer buffers increased from 64KB to 256KB for better Wi-Fi throughput
+- Removed redundant `dumpsys battery` ADB polling — uses real-time Android TCP broadcasts only
+- Battery broadcasts debounced to 30s intervals to prevent socket storms
+- Files sent from Android now stream directly from URI without cache copy (saves memory + storage)
 
 ---
 
