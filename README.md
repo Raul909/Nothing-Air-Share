@@ -23,6 +23,22 @@
 
 ---
 
+## ✨ Why Nothing AirShare?
+
+Apple keeps AirDrop and Universal Clipboard locked to Apple devices — so your **Nothing Phone** gets left out. Nothing AirShare bridges that gap by using your Mac as a quiet relay: **nothing to install on your iPhone**, a lightweight companion app on your Nothing Phone, and everything running **locally over your own Wi‑Fi** — no cloud, no account, no telemetry.
+
+- 🍎🤝⚫️ **Bridges Apple ↔ Nothing** — reuses native AirDrop + Universal Clipboard; zero setup on iOS
+- 📋 **Instant two‑way clipboard** — copy on your Mac, paste on your phone (and back) — text *and* images
+- 📁 **Effortless file sharing** — drag into a folder or use the Share Sheet; files auto‑sort into Pictures / Documents / Downloads
+- 🖱️ **Phone as a trackpad + media remote** — steer your Mac's cursor and playback wirelessly
+- 🔔 **Find My Phone**, 🌙 **Focus / DND sync**, and 🔋 **live battery** right in the menu bar
+- 🔒 **Private by design** — 100% local, PIN‑protected transfers, fully open source
+- ⚫️ **Premium Nothing OS aesthetic** — a dot‑matrix menu‑bar app with a custom adaptive icon
+
+> New here? Jump straight to **[Install the Android app](#-install-the-android-companion-app)** and **[Install the macOS daemon](#️-install-the-macos-sync-daemon)**.
+
+---
+
 ## ⚡️ Ecosystem Architecture
 
 ```
