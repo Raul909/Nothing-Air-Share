@@ -138,7 +138,7 @@ A **Nothing Dot (`⚫️`)** will appear in your Mac's menu bar. Click it to ope
 **On your Nothing Phone:**
 1. Go to **Settings > System > Developer options** (If you don't see it, go to *About phone > Software info* and tap *Build number* 7 times to enable it).
 2. Enable **Wireless Debugging** and tap into it.
-3. Tap **Pair device with pairing code** — note the `IP:Port` (e.g. `192.168.1.30:38291`) and the 6-digit Wi-Fi pairing code.
+3. Tap **Pair device with pairing code** — note the `IP:Port` (e.g. `192.168.x.x:4XXXX`) and the 6-digit Wi-Fi pairing code.
 
 **On your Mac (Visual App Flow):**
 1. Click the `⚫️` menu bar icon -> click **Connect ADB** at the bottom.

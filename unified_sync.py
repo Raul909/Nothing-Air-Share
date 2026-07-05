@@ -1856,7 +1856,7 @@ class ApplicationBootstrap(NSObject):
         alert.setMessageText_("Connect or Pair ADB Wireless")
         alert.setInformativeText_(
             "If your Nothing Phone is not paired with this Mac yet, click 'Pair Device' first.\n"
-            "Otherwise, enter the Wireless Debugging IP & Port (e.g. 192.168.1.30:33349) and click 'Connect':"
+            "Otherwise, enter the Wireless Debugging IP & Port (e.g. 192.168.x.x:4XXXX) and click 'Connect':"
         )
         alert.addButtonWithTitle_("Connect")
         alert.addButtonWithTitle_("Pair Device")
@@ -1906,7 +1906,7 @@ class ApplicationBootstrap(NSObject):
         container = NSView.alloc().initWithFrame_(((0, 0), (280, 60)))
         
         ip_field = NSTextField.alloc().initWithFrame_(((0, 32), (280, 24)))
-        ip_field.setPlaceholderString_("Pairing IP & Port (e.g. 192.168.1.30:38291)")
+        ip_field.setPlaceholderString_("Pairing IP & Port (e.g. 192.168.x.x:4XXXX)")
         
         # Pre-fill discovered IP
         default_ip = ""

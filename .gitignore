@@ -34,7 +34,11 @@ secrets.properties
 signing.properties
 
 
-# Agent & IDE configs
+# Agent & IDE configs (never commit — may leak local paths / tooling context)
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+QODER.md
 .claude/
 .gemini/
 .github/
