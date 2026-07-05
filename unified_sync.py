@@ -27,6 +27,104 @@ import objc
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from ApplicationServices import AXIsProcessTrusted, AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
+import Quartz
+from Quartz import CGEventCreateMouseEvent, CGEventPost, kCGEventMouseMoved, kCGEventLeftMouseDown, kCGEventLeftMouseUp, kCGMouseButtonLeft, kCGHIDEventTap
+
+last_accessibility_warning_time = 0
+
+# Connection state lock to prevent Bonjour auto-connect and monitor loop from racing (C3)
+adb_connect_lock = threading.Lock()
+adb_connecting = False
+
+def recv_exact(sock, n):
+    """Reliably receive exactly n bytes from a socket, looping until complete.
+    Returns the data or raises an exception if the connection closes early."""
+    data = bytearray()
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise ConnectionError(f"Connection closed after {len(data)}/{n} bytes")
+        data.extend(chunk)
+    return bytes(data)
+
+def move_mouse(dx, dy):
+    global last_accessibility_warning_time
+    try:
+        if not AXIsProcessTrusted():
+            now = time.time()
+            if now - last_accessibility_warning_time > 60:
+                last_accessibility_warning_time = now
+                print("[Mouse Control] Missing Accessibility permission")
+                send_mac_notification(
+                    "Accessibility Permission Required",
+                    "Please enable Python/Terminal in System Settings -> Privacy & Security -> Accessibility."
+                )
+                AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+            return
+        loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        new_x = loc.x + dx * 1.5
+        new_y = loc.y + dy * 1.5
+        event = CGEventCreateMouseEvent(None, kCGEventMouseMoved, (new_x, new_y), 0)
+        CGEventPost(Quartz.kCGHIDEventTap, event)
+    except Exception as e:
+        print(f"[Mouse Control] Error: {e}")
+
+def click_mouse():
+    global last_accessibility_warning_time
+    try:
+        if not AXIsProcessTrusted():
+            now = time.time()
+            if now - last_accessibility_warning_time > 60:
+                last_accessibility_warning_time = now
+                print("[Mouse Control] Missing Accessibility permission")
+                send_mac_notification(
+                    "Accessibility Permission Required",
+                    "Please enable Python/Terminal in System Settings -> Privacy & Security -> Accessibility."
+                )
+                AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+            return
+        loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        down = CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, (loc.x, loc.y), kCGMouseButtonLeft)
+        up = CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, (loc.x, loc.y), kCGMouseButtonLeft)
+        CGEventPost(Quartz.kCGHIDEventTap, down)
+        CGEventPost(Quartz.kCGHIDEventTap, up)
+    except Exception as e:
+        print(f"[Mouse Control] Error: {e}")
+
+def simulate_media_key(key):
+    try:
+        if key == "play_pause":
+            cmd = """
+            try
+                tell application "Spotify" to playpause
+            end try
+            try
+                tell application "Music" to playpause
+            end try
+            """
+            subprocess.run(["osascript", "-e", cmd], capture_output=True)
+        elif key == "next":
+            cmd = """
+            try
+                tell application "Spotify" to next track
+            end try
+            try
+                tell application "Music" to next track
+            end try
+            """
+            subprocess.run(["osascript", "-e", cmd], capture_output=True)
+        elif key == "prev":
+            cmd = """
+            try
+                tell application "Spotify" to previous track
+            end try
+            try
+                tell application "Music" to previous track
+            end try
+            """
+            subprocess.run(["osascript", "-e", cmd], capture_output=True)
+    except Exception as e:
+        print(f"[Media Control] Error: {e}")
 
 # Ensure Homebrew and common directories are in PATH for subprocess calls
 for p in ["/opt/homebrew/bin", "/usr/local/bin"]:
@@ -155,7 +253,7 @@ class BonjourManager(NSObject):
             ip = resolve_mdns_hostname(host)
             addr = f"{ip}:{port}"
             print(f"[Bonjour ADB] Discovered Wireless Debugging at {addr}. Dynamic connect...")
-            threading.Thread(target=run_adb_connect, args=(addr,), daemon=True).start()
+            threading.Thread(target=run_adb_connect_safe, args=(addr,), daemon=True).start()
         else:
             self.discovered_devices[service.name()] = (host, port)
             if app_delegate:
@@ -179,7 +277,7 @@ def mac_tcp_server_loop():
     try:
         server.bind(('0.0.0.0', 53317))
         server.listen(5)
-        print("[TCP Server] Listening for peer transfers on port 53317")
+        print("[TCP Server] Listening for peer transfers and commands on port 53317")
     except Exception as e:
         print(f"[TCP Server] Bind failed: {e}")
         return
@@ -187,26 +285,83 @@ def mac_tcp_server_loop():
     while True:
         try:
             conn, addr = server.accept()
-            threading.Thread(target=handle_mac_incoming_file, args=(conn,), daemon=True).start()
+            threading.Thread(target=handle_mac_incoming_connection, args=(conn,), daemon=True).start()
         except Exception as e:
             time.sleep(1)
 
 
-def handle_mac_incoming_file(conn):
+def handle_mac_incoming_connection(conn):
     try:
+        print(f"[TCP Server] Connection accepted: {conn.getpeername()}")
         conn.settimeout(30.0)
-        # 1. Read metadata length (4 bytes big-endian)
-        len_bytes = conn.recv(4)
-        if not len_bytes or len(len_bytes) < 4:
+        # Set TCP_NODELAY to disable Nagle's algorithm — critical for low-latency
+        # mouse move and media commands (L6)
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        while True:
+            # Check for binary mouse_move protocol first (1-byte type marker)
+            # Binary protocol: 0x01 (1 byte) + dx (4 bytes float32 BE) + dy (4 bytes float32 BE) = 9 bytes
+            first_byte = conn.recv(1)
+            if not first_byte:
+                break
+            
+            if first_byte == b'\x01':
+                # Binary mouse_move protocol (L3) — ultra low-latency
+                move_data = recv_exact(conn, 8)  # 2x float32
+                dx, dy = struct.unpack('!ff', move_data)
+                move_mouse(dx, dy)
+                continue
+            
+            # Standard JSON protocol: first byte is part of 4-byte length prefix
+            remaining_len_bytes = recv_exact(conn, 3)
+            len_bytes = first_byte + remaining_len_bytes
+            meta_len = struct.unpack('!I', len_bytes)[0]
+            if meta_len > 100000:
+                break
+                
+            # Use recv_exact for reliable reads (C1)
+            payload_bytes = recv_exact(conn, meta_len)
+                
+            payload_str = payload_bytes.decode('utf-8')
+            data = json.loads(payload_str)
+            
+            msg_type = data.get("type", "file")
+            if msg_type != "mouse_move":
+                print(f"[TCP Server] Received command: {data}")
+            if msg_type == "file":
+                # Set dynamic timeout based on filesize (C5)
+                filesize = data.get("fileSize", 0)
+                dynamic_timeout = max(30.0, filesize / (1024 * 1024) * 5)  # 5s per MB, min 30s
+                conn.settimeout(dynamic_timeout)
+                handle_incoming_file_data(conn, data)
+                break  # File transfer is one-shot
+            elif msg_type == "mouse_move":
+                # JSON fallback for backward compatibility
+                dx = data.get("dx", 0.0)
+                dy = data.get("dy", 0.0)
+                move_mouse(dx, dy)
+            elif msg_type == "mouse_click":
+                click_mouse()
+            elif msg_type == "media_key":
+                key = data.get("key")
+                simulate_media_key(key)
+            elif msg_type == "battery":
+                level = data.get("level", 50)
+                charging = data.get("charging", False)
+                if app_delegate:
+                    app_delegate.update_battery_level_charging(level, charging)
+    except ConnectionError as e:
+        print(f"[TCP Server] Connection closed: {e}")
+    except Exception as e:
+        print(f"[TCP Server] Error: {e}")
+    finally:
+        try:
             conn.close()
-            return
-        meta_len = struct.unpack('!I', len_bytes)[0]
+        except:
+            pass
 
-        # 2. Read metadata JSON
-        meta_bytes = conn.recv(meta_len)
-        meta_str = meta_bytes.decode('utf-8')
-        metadata = json.loads(meta_str)
 
+def handle_incoming_file_data(conn, metadata):
+    try:
         sender = metadata.get("senderName", "Unknown Device")
         filename = metadata.get("fileName", "file.bin")
         filesize = metadata.get("fileSize", 0)
@@ -217,7 +372,6 @@ def handle_mac_incoming_file(conn):
         if provided_pin != expected_pin:
             print("[P2P Receiver] Unauthorized transfer attempt (Invalid PIN)")
             conn.send(bytes([0x02]))
-            conn.close()
             return
 
         print(f"[P2P Receiver] Incoming file request from {sender}: {filename} ({filesize} bytes)")
@@ -253,7 +407,8 @@ def handle_mac_incoming_file(conn):
             with open(dest_path, 'wb') as f:
                 received = 0
                 while received < filesize:
-                    chunk = conn.recv(min(65536, filesize - received))
+                    to_read = min(262144, filesize - received)  # 256KB buffer (L5)
+                    chunk = conn.recv(to_read)
                     if not chunk:
                         break
                     f.write(chunk)
@@ -267,11 +422,8 @@ def handle_mac_incoming_file(conn):
         else:
             conn.send(bytes([0x02]))  # Decline
             print("[P2P Receiver] User declined the transfer.")
-            
     except Exception as e:
         print(f"[P2P Receiver Error] Connection failed: {e}")
-    finally:
-        conn.close()
 
 
 def mac_send_file_to_peer(file_path, device_name, host, port):
@@ -686,6 +838,24 @@ def run_adb_connect(address):
         config = load_config()
         config["last_address"] = address
         save_config(config)
+        # Setup reverse port forward for real-time cursor/media commands
+        subprocess.run(["adb", "reverse", "tcp:53319", "tcp:53317"], capture_output=True)
+        print("[ADB] Setup reverse port forward tcp:53319 -> tcp:53317")
+
+def run_adb_connect_safe(address):
+    """Thread-safe ADB connect that prevents race conditions between
+    Bonjour auto-discovery and the monitor loop (C3)."""
+    global adb_connecting
+    with adb_connect_lock:
+        if adb_connecting:
+            print(f"[ADB] Skipping duplicate connect attempt to {address} (already connecting)")
+            return
+        adb_connecting = True
+    try:
+        run_adb_connect(address)
+    finally:
+        with adb_connect_lock:
+            adb_connecting = False
 
 def run_adb_pair(address, code):
     print(f"[ADB] Attempting to pair with: {address} using code {code}")
@@ -710,32 +880,12 @@ def run_adb_pair(address, code):
 
 # Threads for operations
 def status_polling_loop():
-    # Monitors Focus and Battery
+    # Monitors Focus (Mac -> Android DND sync)
+    # Battery polling removed (L4) — Android app sends real-time battery updates via TCP
     last_dnd_state = None
     while True:
         if app_delegate and app_delegate.connected:
-            # 1. Battery Check
-            try:
-                res = subprocess.run(["adb", "shell", "dumpsys battery"], capture_output=True, text=True, timeout=5)
-                if res.returncode == 0:
-                    level = None
-                    charging = False
-                    for line in res.stdout.splitlines():
-                        if ":" in line:
-                            parts = line.split(":", 1)
-                            key = parts[0].strip()
-                            val = parts[1].strip()
-                            if key == "level":
-                                level = int(val)
-                            elif key == "status":
-                                status = int(val)
-                                charging = status in (2, 5)
-                    if level is not None:
-                        app_delegate.update_battery_level_charging(level, charging)
-            except Exception as e:
-                print(f"[Battery] Error checking battery: {e}")
-                
-            # 2. DND Sync (Mac -> Android)
+            # DND Sync (Mac -> Android)
             try:
                 dnd_state = get_macos_focus_state()
                 if dnd_state != last_dnd_state:
@@ -772,6 +922,9 @@ def android_event_monitor():
     global CURRENT_CLIPBOARD_CONTENT, app_delegate
     
     # Persistent shell script to monitor clipboard, focus, and files on Android
+    # Optimized ADB shell script with differentiated polling intervals (L1, L2):
+    # - Clipboard: every 3rd iteration (600ms) — low latency for user-facing sync
+    # - Files/DND: every 25th iteration (~5s) — less frequent, reduces ADB overhead
     shell_script = """
 last_clip=""
 last_files=""
@@ -779,13 +932,8 @@ last_zen=""
 mkdir -p /sdcard/Android/data/com.nothing.airshare/files/ToMac
 count=0
 while true; do
-  curr_zen=$(settings get global zen_mode 2>/dev/null)
-  if [ "$curr_zen" != "$last_zen" ]; then
-    echo "FOCUS:$curr_zen"
-    last_zen="$curr_zen"
-  fi
   count=$((count + 1))
-  if [ $((count % 10)) -eq 0 ]; then
+  if [ $((count % 3)) -eq 0 ]; then
     data_only=$(cmd clipboard get-text 2>/dev/null | sed -e 's/\r//g')
     if [ -z "$data_only" ]; then
       curr_clip_raw=$(am broadcast -n "TEMPLATE_HELPER_RECEIVER" -a clipper.get -f 32 2>/dev/null | grep "data=")
@@ -799,8 +947,12 @@ while true; do
       last_clip="$data_only"
     fi
   fi
-  if [ $count -ge 10 ]; then
-    count=0
+  if [ $((count % 25)) -eq 0 ]; then
+    curr_zen=$(settings get global zen_mode 2>/dev/null)
+    if [ "$curr_zen" != "$last_zen" ]; then
+      echo "FOCUS:$curr_zen"
+      last_zen="$curr_zen"
+    fi
     curr_files=$(ls /sdcard/Android/data/com.nothing.airshare/files/ToMac 2>/dev/null)
     if [ "$curr_files" != "$last_files" ]; then
       for file in $curr_files; do
@@ -810,6 +962,7 @@ while true; do
       done
       last_files="$curr_files"
     fi
+    count=0
   fi
   sleep 0.2
 done
@@ -822,11 +975,11 @@ done
             lines = device_check.stdout.strip().split('\n')
             
             if len(lines) < 2 or not lines[1].strip() or "device" not in lines[1]:
-                # Try auto-connecting to saved address
+                # Try auto-connecting to saved address using safe lock (C3)
                 config = load_config()
                 if "last_address" in config:
                     print(f"[ADB] Trying auto-reconnect to {config['last_address']}...")
-                    subprocess.run(["adb", "connect", config["last_address"]], capture_output=True, timeout=5)
+                    run_adb_connect_safe(config["last_address"])
                     time.sleep(10)
                     continue
                 
@@ -837,6 +990,9 @@ done
             
             if app_delegate:
                 try:
+                    # Setup reverse port forward for real-time cursor/media commands
+                    subprocess.run(["adb", "reverse", "tcp:53319", "tcp:53317"], capture_output=True)
+                    print("[ADB] Setup reverse port forward tcp:53319 -> tcp:53317")
                     model_res = subprocess.run(["adb", "shell", "getprop ro.product.model"], capture_output=True, text=True, timeout=3)
                     app_delegate.device_model = model_res.stdout.strip() if (model_res.returncode == 0 and model_res.stdout.strip()) else "Nothing Phone"
                 except:
@@ -1142,7 +1298,7 @@ class NothingPopoverViewController(NSViewController):
         title_label.setFrame_(((32, 10), (200, 20)))
         header_bg.addSubview_(title_label)
         
-        version_label = NSTextField.labelWithString_("v2.7.1")
+        version_label = NSTextField.labelWithString_("v2.8.0")
         version_label.setFont_(NSFont.systemFontOfSize_(10))
         version_label.setTextColor_(NSColor.grayColor())
         version_label.setFrame_(((300, 10), (44, 20)))
@@ -1252,6 +1408,9 @@ class NothingPopoverViewController(NSViewController):
         self.refresh_data()
 
     def refresh_data(self):
+        # Clear stale button maps to prevent memory leaks (M4)
+        self.button_device_map.clear()
+        self.button_history_map.clear()
         # Update Status Card
         if self.app_delegate and self.app_delegate.connected:
             self.status_dot.setTextColor_(NSColor.greenColor())
@@ -1283,7 +1442,7 @@ class NothingPopoverViewController(NSViewController):
             lbl.setFrame_(((0, y_offset), (328, 18)))
             self.devices_container.addSubview_(lbl)
         else:
-            for name in devices[:2]:
+            for name in devices[:3]:  # Show up to 3 nearby devices (M3)
                 row_view = NSView.alloc().initWithFrame_(((0, y_offset), (328, 20)))
                 device_lbl = NSTextField.labelWithString_(f"📱 {name}")
                 device_lbl.setFont_(NSFont.systemFontOfSize_(12))
@@ -1315,7 +1474,7 @@ class NothingPopoverViewController(NSViewController):
             lbl.setFrame_(((0, y_offset), (328, 18)))
             self.clipboard_container.addSubview_(lbl)
         else:
-            for text in history[:2]:
+            for text in history[:3]:  # Show 3 clipboard history items as documented in README (M2)
                 display_text = text.replace('\n', ' ')
                 if len(display_text) > 42:
                     display_text = display_text[:39] + "..."
@@ -1495,7 +1654,11 @@ class ApplicationBootstrap(NSObject):
         self.update_menu()
 
     def update_battery_level_charging(self, level, charging):
-        self.battery_level = str(level)
+        # Deduplicate battery updates — only update if value actually changed (M5)
+        new_level = str(level)
+        if new_level == self.battery_level and charging == self.charging:
+            return
+        self.battery_level = new_level
         self.charging = charging
         self.update_menu()
 
@@ -1519,6 +1682,8 @@ class ApplicationBootstrap(NSObject):
         print(f"[Popover] Is shown? {self.popover.isShown()}")
         if self.popover.isShown():
             self.popover.performClose_(None)
+            # Stop auto-refresh timer when popover closes (M1)
+            self._stopRefreshTimer()
         else:
             # Activate the app so the popover can become key window
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
@@ -1542,6 +1707,35 @@ class ApplicationBootstrap(NSObject):
                 print("[Popover] Popover window made key window.")
             except Exception as e:
                 print(f"[Popover] Error making window key: {e}")
+            # Start auto-refresh timer while popover is open (M1)
+            self._startRefreshTimer()
+
+    def _startRefreshTimer(self):
+        """Start a 2-second repeating timer to auto-refresh popover data (M1)."""
+        from Foundation import NSTimer, NSRunLoop, NSDefaultRunLoopMode
+        if hasattr(self, '_refresh_timer') and self._refresh_timer:
+            self._refresh_timer.invalidate()
+        self._refresh_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            2.0, self, "_refreshTimerFired:", None, True
+        )
+        print("[Popover] Auto-refresh timer started (2s interval)")
+
+    def _stopRefreshTimer(self):
+        """Stop the popover auto-refresh timer."""
+        if hasattr(self, '_refresh_timer') and self._refresh_timer:
+            self._refresh_timer.invalidate()
+            self._refresh_timer = None
+            print("[Popover] Auto-refresh timer stopped")
+
+    def _refreshTimerFired_(self, timer):
+        """Called by NSTimer every 2 seconds while popover is open."""
+        if self.popover.isShown() and self.popover_vc.isViewLoaded():
+            try:
+                self.popover_vc.refresh_data()
+            except Exception as e:
+                print(f"[Popover] Auto-refresh error: {e}")
+        else:
+            self._stopRefreshTimer()
 
     def updateUIOnMainThread(self):
         if self.connected:
