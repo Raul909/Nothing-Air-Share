@@ -51,19 +51,30 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-if ! python3 -c "import objc, watchdog, PIL" >/dev/null 2>&1; then
+if ! python3 -c "import objc, watchdog, PIL, PyInstaller" >/dev/null 2>&1; then
   echo "→ Installing app dependencies (one-time, ~1 min)..."
   python3 -m pip install --quiet --upgrade pip
   python3 -m pip install --quiet \
     pyobjc-framework-Cocoa pyobjc-framework-Quartz \
     pyobjc-framework-Accessibility pyobjc-framework-ApplicationServices \
-    watchdog Pillow
+    watchdog Pillow pyinstaller
 fi
 
-# --- 4. Launch ---------------------------------------------------------------
+# --- 4. Build and Install App ------------------------------------------------
+if [ ! -d "/Applications/Nothing AirShare.app" ]; then
+  echo "→ Building standalone macOS App..."
+  pyinstaller --noconsole --name "Nothing AirShare" unified_sync.py >/dev/null 2>&1
+  plutil -insert LSUIElement -bool YES "dist/Nothing AirShare.app/Contents/Info.plist" >/dev/null 2>&1
+  
+  echo "→ Installing to /Applications..."
+  cp -R "dist/Nothing AirShare.app" "/Applications/"
+  rm -rf build dist "Nothing AirShare.spec"
+fi
+
+# --- 5. Launch ---------------------------------------------------------------
 echo ""
 echo "  ✅ Ready! Launching Nothing AirShare."
 echo "  Look for the  ⚫️  dot in your menu bar (top-right of the screen)."
-echo "  To quit: click the dot -> Quit, or just close this window."
+echo "  You can now launch 'Nothing AirShare' directly from your Applications folder!"
 echo ""
-python3 unified_sync.py
+open "/Applications/Nothing AirShare.app"
