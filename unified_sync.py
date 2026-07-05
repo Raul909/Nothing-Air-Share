@@ -139,6 +139,24 @@ CONFIG_DIR = os.path.expanduser("~/.nothing_sync")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 DB_FILE = os.path.join(CONFIG_DIR, "history.db")
 
+# ── Network constants (single source of truth) ──────────────────────────────
+# LAN duplex session port: the Mac TCP server listens here and the phone opens a
+# persistent connection to it. All clip/dnd/battery/command/file messages flow
+# over this one socket. See PeerSession below.
+LAN_PORT = 53317
+# ADB reverse-forward endpoints used only for the optional ADB fallback command
+# path: `adb reverse tcp:ADB_REVERSE_PORT tcp:LAN_PORT` maps a phone-local port
+# to the Mac server so the phone can reach the Mac over 127.0.0.1 via USB/ADB.
+ADB_REVERSE_PORT = 53319
+# Protocol
+PROTO_VERSION = 1
+HEARTBEAT_INTERVAL = 15.0   # seconds between pings on an idle session
+HEARTBEAT_TIMEOUT = 35.0    # drop a session with no traffic for this long
+# ADB fallback reconnect: give up on the cached address after this many tries
+# (the wireless-debugging port rotates, so a stale address never recovers). Once
+# exhausted we wait for Bonjour to re-discover the phone and trigger a fresh connect.
+MAX_ADB_RECONNECT_ATTEMPTS = 5
+
 # Ensure directories exist
 os.makedirs(DROP_ZONE_MAC, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
@@ -151,6 +169,11 @@ LAST_CHANGE_COUNT = -1
 app_delegate = None
 db = None
 bonjour_manager = None
+
+# Live duplex sessions to connected phones, keyed by peer name. Populated when a
+# phone sends a `hello` over the LAN socket (see handle_mac_incoming_connection).
+peer_sessions = {}
+peer_sessions_lock = threading.Lock()
 
 # Helper app configuration for Option B clipboard sync
 HELPER_PACKAGE = "com.nothing.airshare"
@@ -271,13 +294,102 @@ class BonjourManager(NSObject):
                 pass
 
 
+# ── Duplex LAN session ──────────────────────────────────────────────────────
+class PeerSession:
+    """Wraps one persistent phone<->Mac socket so the daemon can *push* messages
+    (clipboard, DND) back to the phone over the same connection the phone opened.
+
+    Writes are serialized with a lock; reads happen on the connection's own
+    handler thread (handle_mac_incoming_connection)."""
+
+    def __init__(self, conn, name):
+        self.conn = conn
+        self.name = name
+        self.write_lock = threading.Lock()
+        self.last_rx = time.time()
+        self.alive = True
+
+    def send(self, msg_dict):
+        """Send a framed JSON message (4-byte BE length prefix + UTF-8 JSON)."""
+        if not self.alive:
+            return False
+        try:
+            payload = json.dumps(msg_dict).encode('utf-8')
+            with self.write_lock:
+                self.conn.sendall(struct.pack('!I', len(payload)))
+                self.conn.sendall(payload)
+            return True
+        except Exception as e:
+            print(f"[Session] Send to {self.name} failed: {e}")
+            self.close()
+            return False
+
+    def close(self):
+        self.alive = False
+        unregister_session(self)
+
+
+def register_session(session):
+    with peer_sessions_lock:
+        peer_sessions[session.name] = session
+    print(f"[Session] Registered live session with {session.name}")
+    if app_delegate:
+        app_delegate.set_connected(True)
+
+
+def unregister_session(session):
+    removed = False
+    with peer_sessions_lock:
+        if peer_sessions.get(session.name) is session:
+            del peer_sessions[session.name]
+            removed = True
+        any_left = bool(peer_sessions)
+    if removed:
+        print(f"[Session] Closed session with {session.name}")
+    if not any_left and app_delegate:
+        app_delegate.set_connected(False)
+
+
+def has_live_session():
+    with peer_sessions_lock:
+        return bool(peer_sessions)
+
+
+def push_to_phones(msg_dict):
+    """Push a message to every live phone session. Returns True if at least one
+    session received it."""
+    with peer_sessions_lock:
+        sessions = list(peer_sessions.values())
+    delivered = False
+    for s in sessions:
+        if s.send(msg_dict):
+            delivered = True
+    return delivered
+
+
+def heartbeat_loop():
+    """Ping idle sessions and reap dead ones so a silently-dropped socket is
+    detected within ~HEARTBEAT_TIMEOUT instead of on next user action."""
+    while True:
+        time.sleep(HEARTBEAT_INTERVAL)
+        with peer_sessions_lock:
+            sessions = list(peer_sessions.values())
+        now = time.time()
+        for s in sessions:
+            if now - s.last_rx > HEARTBEAT_TIMEOUT:
+                print(f"[Session] {s.name} timed out (no traffic)")
+                s.close()
+            else:
+                s.send({"type": "ping"})
+
+
 def mac_tcp_server_loop():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        server.bind(('0.0.0.0', 53317))
+        server.bind(('0.0.0.0', LAN_PORT))
         server.listen(5)
-        print("[TCP Server] Listening for peer transfers and commands on port 53317")
+        print(f"[TCP Server] Listening for peer transfers and commands on port {LAN_PORT}")
     except Exception as e:
         print(f"[TCP Server] Bind failed: {e}")
         return
@@ -291,6 +403,10 @@ def mac_tcp_server_loop():
 
 
 def handle_mac_incoming_connection(conn):
+    # A connection becomes a persistent duplex `session` once the phone sends a
+    # `hello`. Until then (and for one-shot file transfers) it behaves exactly as
+    # before, so older phones that never send `hello` keep working over ADB.
+    session = None
     try:
         print(f"[TCP Server] Connection accepted: {conn.getpeername()}")
         conn.settimeout(30.0)
@@ -303,37 +419,66 @@ def handle_mac_incoming_connection(conn):
             first_byte = conn.recv(1)
             if not first_byte:
                 break
-            
+
+            if session:
+                session.last_rx = time.time()
+
             if first_byte == b'\x01':
                 # Binary mouse_move protocol (L3) — ultra low-latency
                 move_data = recv_exact(conn, 8)  # 2x float32
                 dx, dy = struct.unpack('!ff', move_data)
                 move_mouse(dx, dy)
                 continue
-            
+
             # Standard JSON protocol: first byte is part of 4-byte length prefix
             remaining_len_bytes = recv_exact(conn, 3)
             len_bytes = first_byte + remaining_len_bytes
             meta_len = struct.unpack('!I', len_bytes)[0]
             if meta_len > 100000:
                 break
-                
+
             # Use recv_exact for reliable reads (C1)
             payload_bytes = recv_exact(conn, meta_len)
-                
+
             payload_str = payload_bytes.decode('utf-8')
             data = json.loads(payload_str)
-            
+
             msg_type = data.get("type", "file")
-            if msg_type != "mouse_move":
+            if msg_type not in ("mouse_move", "ping", "pong"):
                 print(f"[TCP Server] Received command: {data}")
-            if msg_type == "file":
+
+            if msg_type == "hello":
+                # Promote this connection to a persistent duplex session so the
+                # daemon can push clipboard/DND back over the same socket.
+                name = data.get("name", "Nothing Phone")
+                conn.settimeout(HEARTBEAT_TIMEOUT + 10)
+                session = PeerSession(conn, name)
+                register_session(session)
+                if app_delegate:
+                    app_delegate.device_model = name
+                session.send({"type": "hello", "name": "MacBook", "protoVersion": PROTO_VERSION})
+            elif msg_type == "clip":
+                apply_incoming_clip(data)
+            elif msg_type == "dnd":
+                is_dnd = bool(data.get("on", False))
+                status_text = "Enabled" if is_dnd else "Disabled"
+                print(f"[Phone] DND {status_text}")
+                send_mac_notification("Nothing Phone", f"Do Not Disturb {status_text}")
+            elif msg_type == "ping":
+                if session:
+                    session.send({"type": "pong"})
+            elif msg_type == "pong":
+                pass  # liveness already refreshed via last_rx above
+            elif msg_type == "file":
                 # Set dynamic timeout based on filesize (C5)
                 filesize = data.get("fileSize", 0)
                 dynamic_timeout = max(30.0, filesize / (1024 * 1024) * 5)  # 5s per MB, min 30s
                 conn.settimeout(dynamic_timeout)
                 handle_incoming_file_data(conn, data)
-                break  # File transfer is one-shot
+                if session:
+                    conn.settimeout(HEARTBEAT_TIMEOUT + 10)  # restore session timeout
+                else:
+                    break  # standalone file transfer is one-shot
             elif msg_type == "mouse_move":
                 # JSON fallback for backward compatibility
                 dx = data.get("dx", 0.0)
@@ -354,9 +499,11 @@ def handle_mac_incoming_connection(conn):
     except Exception as e:
         print(f"[TCP Server] Error: {e}")
     finally:
+        if session:
+            session.close()
         try:
             conn.close()
-        except:
+        except Exception:
             pass
 
 
@@ -769,6 +916,24 @@ def set_mac_clipboard(type, data):
         "writeClipboard:", ctx, True
     )
 
+def apply_incoming_clip(data):
+    """Apply a `clip` message pushed from the phone to the Mac pasteboard, with
+    echo-suppression via CURRENT_CLIPBOARD_CONTENT so the value can't ping-pong."""
+    global CURRENT_CLIPBOARD_CONTENT
+    if data.get("format", "text") != "text":
+        return  # image clips arrive over the file channel
+    text = data.get("data", "")
+    if not text:
+        return
+    with sync_state_lock:
+        if text != CURRENT_CLIPBOARD_CONTENT:
+            print(f"[Phone] Clipboard changed: {text[:20]}...")
+            CURRENT_CLIPBOARD_CONTENT = text
+            if db:
+                db.add_item(text)
+            set_mac_clipboard("text", text)
+            send_mac_notification("Nothing Clipboard", f"Copied: {text[:30]}")
+
 def detect_helper_package():
     global HELPER_PACKAGE, HELPER_RECEIVER
     try:
@@ -818,6 +983,16 @@ def push_to_android_clipboard(item):
     except Exception as e:
         print(f"[Error] Android Push Failed: {e}")
 
+def sync_clipboard_to_phone(item):
+    """Push a Mac clipboard change to the phone. Prefers the live LAN session
+    (instant, no ADB); falls back to the ADB path when no session is active."""
+    if item["type"] == "text":
+        if push_to_phones({"type": "clip", "format": "text", "data": item["data"]}):
+            print(f"[Sync] Text pushed to phone over session: {item['data'][:30]}...")
+            return
+    # No live session (or image payload) — fall back to ADB.
+    push_to_android_clipboard(item)
+
 # Native macOS Focus Check
 def get_macos_focus_state():
     try:
@@ -839,8 +1014,8 @@ def run_adb_connect(address):
         config["last_address"] = address
         save_config(config)
         # Setup reverse port forward for real-time cursor/media commands
-        subprocess.run(["adb", "reverse", "tcp:53319", "tcp:53317"], capture_output=True)
-        print("[ADB] Setup reverse port forward tcp:53319 -> tcp:53317")
+        subprocess.run(["adb", "reverse", f"tcp:{ADB_REVERSE_PORT}", f"tcp:{LAN_PORT}"], capture_output=True)
+        print(f"[ADB] Setup reverse port forward tcp:{ADB_REVERSE_PORT} -> tcp:{LAN_PORT}")
 
 def run_adb_connect_safe(address):
     """Thread-safe ADB connect that prevents race conditions between
@@ -885,14 +1060,17 @@ def status_polling_loop():
     last_dnd_state = None
     while True:
         if app_delegate and app_delegate.connected:
-            # DND Sync (Mac -> Android)
+            # DND Sync (Mac -> Android): prefer the live session, fall back to ADB
             try:
                 dnd_state = get_macos_focus_state()
                 if dnd_state != last_dnd_state:
                     last_dnd_state = dnd_state
                     state_str = "on" if dnd_state else "off"
-                    subprocess.run(["adb", "shell", f"cmd notification dnd {state_str}"], capture_output=True)
-                    print(f"[Focus] Synced Focus Mode '{state_str}' to Android")
+                    if push_to_phones({"type": "dnd", "on": dnd_state}):
+                        print(f"[Focus] Pushed Focus Mode '{state_str}' over session")
+                    else:
+                        subprocess.run(["adb", "shell", f"cmd notification dnd {state_str}"], capture_output=True)
+                        print(f"[Focus] Synced Focus Mode '{state_str}' to Android (ADB)")
             except Exception as e:
                 print(f"[Focus] Error syncing DND to Android: {e}")
                 
@@ -911,9 +1089,9 @@ def mac_clipboard_watcher():
                         if item["data"] != CURRENT_CLIPBOARD_CONTENT:
                             CURRENT_CLIPBOARD_CONTENT = item["data"]
                             db.add_item(CURRENT_CLIPBOARD_CONTENT)
-                            threading.Thread(target=push_to_android_clipboard, args=(item,)).start()
+                            threading.Thread(target=sync_clipboard_to_phone, args=(item,)).start()
                 else:
-                    threading.Thread(target=push_to_android_clipboard, args=(item,)).start()
+                    threading.Thread(target=sync_clipboard_to_phone, args=(item,)).start()
         except Exception as e:
             pass
         time.sleep(0.2)
@@ -968,31 +1146,44 @@ while true; do
 done
 """
     
+    reconnect_attempts = 0
     while True:
         try:
             # Check if any ADB devices are connected
             device_check = subprocess.run(["adb", "devices"], capture_output=True, text=True)
             lines = device_check.stdout.strip().split('\n')
-            
+
             if len(lines) < 2 or not lines[1].strip() or "device" not in lines[1]:
-                # Try auto-connecting to saved address using safe lock (C3)
-                config = load_config()
-                if "last_address" in config:
-                    print(f"[ADB] Trying auto-reconnect to {config['last_address']}...")
-                    run_adb_connect_safe(config["last_address"])
+                # A live LAN session already carries clipboard/DND/file over TCP —
+                # don't churn ADB reconnects (this was the source of the log spam).
+                if has_live_session():
+                    reconnect_attempts = 0
                     time.sleep(10)
                     continue
-                
-                if app_delegate:
+                # Try the saved address with capped exponential backoff, then give
+                # up (the wireless-debugging port rotates, so a stale address will
+                # never recover — Bonjour re-discovery triggers a fresh connect).
+                config = load_config()
+                if "last_address" in config and reconnect_attempts < MAX_ADB_RECONNECT_ATTEMPTS:
+                    reconnect_attempts += 1
+                    backoff = min(10 * (2 ** (reconnect_attempts - 1)), 120)
+                    print(f"[ADB] Auto-reconnect {reconnect_attempts}/{MAX_ADB_RECONNECT_ATTEMPTS} "
+                          f"to {config['last_address']} (next retry in {backoff}s)")
+                    run_adb_connect_safe(config["last_address"])
+                    time.sleep(backoff)
+                    continue
+
+                if app_delegate and not has_live_session():
                     app_delegate.set_connected(False)
-                time.sleep(10)
+                time.sleep(15)
                 continue
-            
+
+            reconnect_attempts = 0
             if app_delegate:
                 try:
                     # Setup reverse port forward for real-time cursor/media commands
-                    subprocess.run(["adb", "reverse", "tcp:53319", "tcp:53317"], capture_output=True)
-                    print("[ADB] Setup reverse port forward tcp:53319 -> tcp:53317")
+                    subprocess.run(["adb", "reverse", f"tcp:{ADB_REVERSE_PORT}", f"tcp:{LAN_PORT}"], capture_output=True)
+                    print(f"[ADB] Setup reverse port forward tcp:{ADB_REVERSE_PORT} -> tcp:{LAN_PORT}")
                     model_res = subprocess.run(["adb", "shell", "getprop ro.product.model"], capture_output=True, text=True, timeout=3)
                     app_delegate.device_model = model_res.stdout.strip() if (model_res.returncode == 0 and model_res.stdout.strip()) else "Nothing Phone"
                 except:
@@ -1060,11 +1251,11 @@ done
             
             proc.wait()
             print("[ADB Stream] Process exited")
-            if app_delegate:
+            if app_delegate and not has_live_session():
                 app_delegate.set_connected(False)
         except Exception as e:
             print(f"[ADB Stream] Connection broke: {e}")
-            if app_delegate:
+            if app_delegate and not has_live_session():
                 app_delegate.set_connected(False)
         time.sleep(3)
 
@@ -1640,6 +1831,7 @@ class ApplicationBootstrap(NSObject):
         threading.Thread(target=android_event_monitor, daemon=True).start()
         threading.Thread(target=mac_clipboard_watcher, daemon=True).start()
         threading.Thread(target=status_polling_loop, daemon=True).start()
+        threading.Thread(target=heartbeat_loop, daemon=True).start()
         
         # Start file watchdog on macOS Drop folder and Downloads folder for AirDrop forwarding
         observer = Observer()
