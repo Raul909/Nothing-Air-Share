@@ -62,7 +62,8 @@ fi
 
 # --- 4. Build and Install App ------------------------------------------------
 echo "→ Building standalone macOS App..."
-pyinstaller --noconsole --name "Nothing AirShare" unified_sync.py >/dev/null 2>&1
+rm -rf __pycache__ build dist "Nothing AirShare.spec"
+pyinstaller --clean -y --noconsole --name "Nothing AirShare" unified_sync.py >/dev/null 2>&1
 plutil -insert LSUIElement -bool YES "dist/Nothing AirShare.app/Contents/Info.plist" >/dev/null 2>&1
 
 echo "→ Installing to /Applications..."
