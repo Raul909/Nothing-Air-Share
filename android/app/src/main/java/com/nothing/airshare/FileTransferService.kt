@@ -29,27 +29,47 @@ object FileTransferService {
         isRunning = true
         
         thread {
-            try {
-                serverSocket = ServerSocket(port).apply {
-                    reuseAddress = true
-                    soTimeout = 1000
-                }
-                Log.d("TransferService", "TCP Server listening on port $port")
-                
-                while (isRunning) {
-                    try {
-                        val clientSocket = serverSocket?.accept()
-                        if (clientSocket != null) {
-                            thread {
-                                handleIncomingConnection(clientSocket)
-                            }
-                        }
-                    } catch (e: java.net.SocketTimeoutException) {
-                        // Expected, allows loop to check isRunning
+            // Retry binding with exponential backoff (K5)
+            var bindAttempt = 0
+            val maxBindAttempts = 3
+            var bound = false
+            
+            while (bindAttempt < maxBindAttempts && !bound) {
+                try {
+                    serverSocket = ServerSocket(port).apply {
+                        reuseAddress = true
+                        soTimeout = 1000
+                    }
+                    Log.d("TransferService", "TCP Server listening on port $port")
+                    bound = true
+                } catch (e: Exception) {
+                    bindAttempt++
+                    Log.e("TransferService", "Server bind failed (attempt $bindAttempt/$maxBindAttempts): ${e.message}")
+                    if (bindAttempt < maxBindAttempts) {
+                        val backoffMs = 1000L * (1 shl (bindAttempt - 1))  // 1s, 2s, 4s
+                        Log.d("TransferService", "Retrying bind in ${backoffMs}ms...")
+                        try { Thread.sleep(backoffMs) } catch (_: InterruptedException) {}
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("TransferService", "Server error: ${e.message}")
+            }
+            
+            if (!bound) {
+                Log.e("TransferService", "Failed to bind server after $maxBindAttempts attempts")
+                isRunning = false
+                return@thread
+            }
+            
+            while (isRunning) {
+                try {
+                    val clientSocket = serverSocket?.accept()
+                    if (clientSocket != null) {
+                        thread {
+                            handleIncomingConnection(clientSocket)
+                        }
+                    }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // Expected, allows loop to check isRunning
+                }
             }
         }
     }
@@ -149,7 +169,7 @@ object FileTransferService {
                 }
 
                 val fos = FileOutputStream(targetFile)
-                val buffer = ByteArray(65536)
+                val buffer = ByteArray(262144)  // 256KB buffer for optimal Wi-Fi throughput (L5)
                 var bytesRead: Int
                 var totalBytesRead = 0L
 
@@ -219,7 +239,7 @@ object FileTransferService {
                     
                     // 4. Stream file bytes
                     val fis = FileInputStream(file)
-                    val buffer = ByteArray(65536)
+                    val buffer = ByteArray(262144)  // 256KB buffer (L5)
                     var bytesRead: Int
                     var totalBytesSent = 0L
                     val totalSize = file.length()
@@ -251,5 +271,77 @@ object FileTransferService {
 
     private fun updateStatus(msg: String) {
         statusHandler?.invoke(msg)
+    }
+
+    /**
+     * Stream a file directly from a content URI without materializing to cache (K3).
+     * Reduces memory usage and eliminates the latency of copying large files to disk.
+     */
+    fun sendFileFromUri(context: android.content.Context, uri: android.net.Uri, host: InetAddress, port: Int) {
+        thread {
+            try {
+                // Get file name and size from ContentResolver
+                var fileName = "file.bin"
+                var fileSize = 0L
+                val cursor = context.contentResolver.query(uri, null, null, null, null)
+                cursor?.use {
+                    if (it.moveToFirst()) {
+                        val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        val sizeIndex = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (nameIndex != -1) fileName = it.getString(nameIndex)
+                        if (sizeIndex != -1) fileSize = it.getLong(sizeIndex)
+                    }
+                }
+
+                updateStatus("Connecting to receiver...")
+                val socket = Socket(host, port)
+                socket.soTimeout = 30000
+                val dis = DataInputStream(socket.getInputStream())
+                val dos = DataOutputStream(socket.getOutputStream())
+
+                val metadata = org.json.JSONObject().apply {
+                    put("senderName", android.os.Build.MODEL)
+                    put("fileName", fileName)
+                    put("fileSize", fileSize)
+                    put("pin", securityPin)
+                }
+                val metaBytes = metadata.toString().toByteArray(Charsets.UTF_8)
+                dos.writeInt(metaBytes.size)
+                dos.write(metaBytes)
+                dos.flush()
+
+                updateStatus("Waiting for approval...")
+                val response = dis.readByte().toInt()
+                if (response == 0x01) {
+                    updateStatus("Sending: $fileName")
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                        ?: throw Exception("Cannot open input stream for URI")
+                    val buffer = ByteArray(262144)  // 256KB buffer (L5)
+                    var bytesRead: Int
+                    var totalBytesSent = 0L
+
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        dos.write(buffer, 0, bytesRead)
+                        totalBytesSent += bytesRead
+                        val progress = if (fileSize > 0) totalBytesSent.toDouble() / fileSize else 0.0
+                        progressHandler?.invoke(progress)
+                    }
+
+                    dos.flush()
+                    inputStream.close()
+                    Log.d("TransferService", "File sent successfully via URI stream!")
+                    updateStatus("Sent: $fileName")
+                    progressHandler?.invoke(1.0)
+                } else {
+                    Log.d("TransferService", "Receiver rejected the file.")
+                    updateStatus("Receiver rejected transfer")
+                }
+
+                socket.close()
+            } catch (e: Exception) {
+                Log.e("TransferService", "Send file from URI error: ${e.message}")
+                updateStatus("Send failed: ${e.localizedMessage}")
+            }
+        }
     }
 }

@@ -29,6 +29,11 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.InetAddress
+import android.content.BroadcastReceiver
+import java.net.Socket
+import org.json.JSONObject
+import kotlin.concurrent.thread
+import android.util.Log
 
 class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
     private lateinit var binding: ActivityMainBinding
@@ -40,6 +45,18 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
     private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
         updateClipboardUI()
     }
+
+    // Command sender variables
+    private var commandThread: android.os.HandlerThread? = null
+    private var commandHandler: Handler? = null
+    private var commandSocket: Socket? = null
+    private var commandDos: java.io.DataOutputStream? = null
+
+    // Battery monitoring variables
+    private var batteryReceiver: BroadcastReceiver? = null
+    private var lastBatteryLevel = -1
+    private var lastChargingState = false
+    private var lastBatterySendTime = 0L  // Debounce battery broadcasts (K2)
 
     private val handler = Handler(Looper.getMainLooper())
     private val checkFolderRunnable = object : Runnable {
@@ -53,9 +70,9 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
     private val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null && selectedDeviceTarget != null) {
             try {
-                val tempFile = getFileFromUri(this, uri)
                 val target = selectedDeviceTarget!!
-                FileTransferService.sendFile(tempFile, target.first, target.second)
+                // Stream file directly from URI instead of copying to cache (K3)
+                FileTransferService.sendFileFromUri(this, uri, target.first, target.second)
             } catch (e: Exception) {
                 Toast.makeText(this, "Failed to prepare file: ${e.message}", Toast.LENGTH_SHORT).show()
             }
@@ -99,6 +116,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
 
         // 2. Initialize TCP Server
         FileTransferService.startServer()
+        registerBatteryReceiver()
 
         // 3. Bind File Transfer Callbacks to UI
         FileTransferService.progressHandler = { progress ->
@@ -307,6 +325,7 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
             val enabled = prefs.getBoolean("pref_remote_input", true)
             if (enabled) {
                 binding.overlayTrackpad.visibility = View.VISIBLE
+                startCommandSession()
             } else {
                 Toast.makeText(this, "Remote Trackpad plugin is disabled in Settings", Toast.LENGTH_SHORT).show()
             }
@@ -314,42 +333,85 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
 
         binding.cardMedia.setOnClickListener {
             binding.overlayMedia.visibility = View.VISIBLE
+            startCommandSession()
         }
 
         // --- Overlay back buttons ---
         binding.btnBackTrackpad.setOnClickListener {
             binding.overlayTrackpad.visibility = View.GONE
+            stopCommandSession()
         }
 
         binding.btnBackMedia.setOnClickListener {
             binding.overlayMedia.visibility = View.GONE
+            stopCommandSession()
         }
 
         // --- Trackpad touch handling ---
+        var lastX = 0f
+        var lastY = 0f
+        var downTime = 0L
+        var hasMoved = false
+
         binding.trackpadSurface.setOnTouchListener { _, event ->
             when (event.action) {
-                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                    // Visual feedback: update a cursor dot position
+                MotionEvent.ACTION_DOWN -> {
+                    lastX = event.x
+                    lastY = event.y
+                    downTime = System.currentTimeMillis()
+                    hasMoved = false
+                    
                     binding.trackpadCursor.x = event.x - 12f
                     binding.trackpadCursor.y = event.y - 12f
                     binding.trackpadCursor.visibility = View.VISIBLE
                 }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.x - lastX
+                    val dy = event.y - lastY
+                    lastX = event.x
+                    lastY = event.y
+                    
+                    if (Math.abs(dx) > 0.5f || Math.abs(dy) > 0.5f) {
+                        hasMoved = true
+                        sendTrackpadMoveBinary(dx, dy)  // Binary protocol for low latency (L3)
+                    }
+                    
+                    binding.trackpadCursor.x = event.x - 12f
+                    binding.trackpadCursor.y = event.y - 12f
+                }
                 MotionEvent.ACTION_UP -> {
                     binding.trackpadCursor.visibility = View.INVISIBLE
+                    flushPendingMouseMove()  // Flush any coalesced moves (L3)
+                    val duration = System.currentTimeMillis() - downTime
+                    if (duration < 300 && !hasMoved) {
+                        sendTrackpadClick()
+                    }
                 }
             }
             true
         }
 
-        // --- Media button placeholders ---
+        // --- Media button handlers ---
         binding.btnPlayPause.setOnClickListener {
-            Toast.makeText(this, "Media control: awaiting Mac connection", Toast.LENGTH_SHORT).show()
+            val json = JSONObject().apply {
+                put("type", "media_key")
+                put("key", "play_pause")
+            }
+            sendCommand(json)
         }
         binding.btnPrev.setOnClickListener {
-            Toast.makeText(this, "Previous track: awaiting Mac connection", Toast.LENGTH_SHORT).show()
+            val json = JSONObject().apply {
+                put("type", "media_key")
+                put("key", "prev")
+            }
+            sendCommand(json)
         }
         binding.btnNext.setOnClickListener {
-            Toast.makeText(this, "Next track: awaiting Mac connection", Toast.LENGTH_SHORT).show()
+            val json = JSONObject().apply {
+                put("type", "media_key")
+                put("key", "next")
+            }
+            sendCommand(json)
         }
 
         // --- System Utilities (Wireless Debugging) ---
@@ -379,9 +441,11 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         when {
             binding.overlayTrackpad.visibility == View.VISIBLE -> {
                 binding.overlayTrackpad.visibility = View.GONE
+                stopCommandSession()
             }
             binding.overlayMedia.visibility == View.VISIBLE -> {
                 binding.overlayMedia.visibility = View.GONE
+                stopCommandSession()
             }
             binding.overlaySettings.visibility == View.VISIBLE -> {
                 binding.overlaySettings.visibility = View.GONE
@@ -552,7 +616,11 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         
         val tempFile = File(context.cacheDir, getFileName(context, uri))
         val outputStream = FileOutputStream(tempFile)
-        inputStream.copyTo(outputStream)
+        val buffer = ByteArray(262144)  // 256KB buffer (L5)
+        var bytesRead: Int
+        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+            outputStream.write(buffer, 0, bytesRead)
+        }
         
         inputStream.close()
         outputStream.close()
@@ -627,11 +695,259 @@ class MainActivity : AppCompatActivity(), NsdHelper.NsdListener {
         binding.drawerAbout.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
     }
 
+    private fun getMacConnectionAddress(): Pair<String, Int> {
+        selectedDeviceTarget?.let {
+            return Pair(it.first.hostAddress ?: "127.0.0.1", it.second)
+        }
+        val prefs = getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
+        val manualIp = prefs.getString("mac_ip", "") ?: ""
+        val manualPort = prefs.getInt("mac_port", 53317)
+        if (manualIp.isNotEmpty()) {
+            return Pair(manualIp, manualPort)
+        }
+        return Pair("127.0.0.1", 53319)
+    }
+
+    private fun startCommandSession() {
+        stopCommandSession()
+        
+        val thread = android.os.HandlerThread("CommandSenderThread")
+        thread.start()
+        commandThread = thread
+        val handler = Handler(thread.looper)
+        commandHandler = handler
+        
+        // Auto-reconnect with exponential backoff (C2)
+        handler.post {
+            var retryCount = 0
+            val maxRetries = 3
+            var connected = false
+            
+            while (retryCount < maxRetries && !connected) {
+                try {
+                    val addr = getMacConnectionAddress()
+                    Log.d("MainActivity", "Connecting command socket to ${addr.first}:${addr.second} (attempt ${retryCount + 1}/$maxRetries)")
+                    val socket = Socket(addr.first, addr.second)
+                    socket.soTimeout = 30000
+                    socket.tcpNoDelay = true
+                    commandSocket = socket
+                    commandDos = java.io.DataOutputStream(socket.getOutputStream())
+                    Log.d("MainActivity", "Command socket connected successfully")
+                    connected = true
+                } catch (e: Exception) {
+                    retryCount++
+                    Log.e("MainActivity", "Failed to connect command socket (attempt $retryCount/$maxRetries): ${e.message}")
+                    if (retryCount < maxRetries) {
+                        val backoffMs = (1000L * (1 shl (retryCount - 1)))  // 1s, 2s, 4s
+                        Log.d("MainActivity", "Retrying in ${backoffMs}ms...")
+                        try { Thread.sleep(backoffMs) } catch (_: InterruptedException) {}
+                    }
+                }
+            }
+            
+            if (!connected) {
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Failed to connect to Mac after $maxRetries attempts", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun stopCommandSession() {
+        val oldHandler = commandHandler
+        val oldThread = commandThread
+        commandHandler = null
+        commandThread = null
+        
+        if (oldHandler != null) {
+            oldHandler.post {
+                try {
+                    commandDos?.close()
+                    commandSocket?.close()
+                    Log.d("MainActivity", "Command socket closed")
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Error closing command socket: ${e.message}")
+                } finally {
+                    commandDos = null
+                    commandSocket = null
+                }
+                oldThread?.quit()
+            }
+        } else {
+            try {
+                commandDos?.close()
+                commandSocket?.close()
+            } catch (e: Exception) {}
+            commandDos = null
+            commandSocket = null
+            oldThread?.quit()
+        }
+    }
+
+    private fun sendCommand(json: JSONObject) {
+        commandHandler?.post {
+            try {
+                val dos = commandDos
+                if (dos != null) {
+                    val bytes = json.toString().toByteArray(Charsets.UTF_8)
+                    dos.writeInt(bytes.size)
+                    dos.write(bytes)
+                    dos.flush()
+                } else {
+                    Log.w("MainActivity", "Cannot send command, DataOutputStream is null")
+                    // Surface error to UI and attempt reconnect (K1)
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Connection lost. Reconnecting...", Toast.LENGTH_SHORT).show()
+                    }
+                    startCommandSession()
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error sending command: ${e.message}")
+                // Surface error to UI and attempt reconnect (K1)
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Connection lost. Reconnecting...", Toast.LENGTH_SHORT).show()
+                }
+                commandDos = null
+                commandSocket?.let { try { it.close() } catch (_: Exception) {} }
+                commandSocket = null
+                startCommandSession()
+            }
+        }
+    }
+
+    // Binary mouse move protocol (L3): 1-byte type marker (0x01) + 2x float32 BE = 9 bytes total
+    // Coalesces moves within 16ms windows for optimal throughput
+    private var pendingDx = 0f
+    private var pendingDy = 0f
+    private var lastMouseSendTime = 0L
+    private val MOUSE_COALESCE_MS = 16L  // ~60fps
+
+    private fun sendTrackpadMoveBinary(dx: Float, dy: Float) {
+        pendingDx += dx
+        pendingDy += dy
+        val now = System.currentTimeMillis()
+        if (now - lastMouseSendTime >= MOUSE_COALESCE_MS) {
+            flushPendingMouseMove()
+        } else {
+            // Schedule flush after remaining coalesce window
+            commandHandler?.postDelayed({
+                flushPendingMouseMove()
+            }, MOUSE_COALESCE_MS - (now - lastMouseSendTime))
+        }
+    }
+
+    private fun flushPendingMouseMove() {
+        val dx = pendingDx
+        val dy = pendingDy
+        if (dx == 0f && dy == 0f) return
+        pendingDx = 0f
+        pendingDy = 0f
+        lastMouseSendTime = System.currentTimeMillis()
+        
+        commandHandler?.post {
+            try {
+                val dos = commandDos ?: return@post
+                // Binary protocol: 0x01 marker + dx (float32 BE) + dy (float32 BE)
+                val buf = java.nio.ByteBuffer.allocate(9)
+                buf.order(java.nio.ByteOrder.BIG_ENDIAN)
+                buf.put(0x01.toByte())
+                buf.putFloat(dx)
+                buf.putFloat(dy)
+                dos.write(buf.array())
+                dos.flush()
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error sending binary mouse move: ${e.message}")
+            }
+        }
+    }
+
+    private fun sendTrackpadMove(dx: Float, dy: Float) {
+        // Legacy JSON fallback — kept for compatibility
+        val json = JSONObject().apply {
+            put("type", "mouse_move")
+            put("dx", dx.toDouble())
+            put("dy", dy.toDouble())
+        }
+        sendCommand(json)
+    }
+
+    private fun sendTrackpadClick() {
+        val json = JSONObject().apply {
+            put("type", "mouse_click")
+        }
+        sendCommand(json)
+    }
+
+    private fun sendOneOffCommand(json: JSONObject) {
+        thread {
+            var socket: Socket? = null
+            try {
+                val addr = getMacConnectionAddress()
+                socket = Socket(addr.first, addr.second)
+                socket.soTimeout = 5000
+                val dos = java.io.DataOutputStream(socket.getOutputStream())
+                val bytes = json.toString().toByteArray(Charsets.UTF_8)
+                dos.writeInt(bytes.size)
+                dos.write(bytes)
+                dos.flush()
+                Log.d("MainActivity", "Successfully sent one-off command: ${json.optString("type")}")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error sending one-off command: ${e.message}")
+            } finally {
+                try {
+                    socket?.close()
+                } catch (ex: Exception) {}
+            }
+        }
+    }
+
+    private fun registerBatteryReceiver() {
+        batteryReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+                val pct = if (scale > 0) (level * 100) / scale else -1
+                
+                val status = intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+                val charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                               status == android.os.BatteryManager.BATTERY_STATUS_FULL
+                
+                if (pct != lastBatteryLevel || charging != lastChargingState) {
+                    // Debounce battery broadcasts — 30s minimum interval (K2)
+                    val now = System.currentTimeMillis()
+                    if (now - lastBatterySendTime < 30_000L && lastBatteryLevel != -1) {
+                        // Update local tracking but don't send yet
+                        lastBatteryLevel = pct
+                        lastChargingState = charging
+                        return
+                    }
+                    lastBatteryLevel = pct
+                    lastChargingState = charging
+                    lastBatterySendTime = now
+                    Log.d("MainActivity", "Battery changed: $pct%, charging: $charging")
+                    
+                    val json = JSONObject().apply {
+                        put("type", "battery")
+                        put("level", pct)
+                        put("charging", charging)
+                    }
+                    sendOneOffCommand(json)
+                }
+            }
+        }
+        registerReceiver(batteryReceiver, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         nsdHelper.stop()
         FileTransferService.stopServer()
         handler.removeCallbacks(checkFolderRunnable)
         clipboard.removePrimaryClipChangedListener(clipboardListener)
+        stopCommandSession()
+        batteryReceiver?.let {
+            unregisterReceiver(it)
+            batteryReceiver = null
+        }
     }
 }
