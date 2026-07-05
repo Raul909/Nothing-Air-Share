@@ -131,12 +131,44 @@ def _post_aux_key(key_code):
     Quartz.CGEventSetIntegerValueField(ev_up, Quartz.kCGEventSourceUserData, 0)
     Quartz.CGEventSetIntegerValueField(ev_up, Quartz.kCGKeyboardEventAutorepeat, 0)
     Quartz.CGEventSetIntegerValueField(ev_up, 109, (key_code << 16) | (0xb << 8))
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_down)
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_up)
+    Quartz.CGEventPost(Quartz.kCGSessionEventTap, ev_down)
+    Quartz.CGEventPost(Quartz.kCGSessionEventTap, ev_up)
+
+def simulate_key_combo(keycode, flags=None):
+    if not _ax_ok(): return
+    ev_down = Quartz.CGEventCreateKeyboardEvent(None, keycode, True)
+    ev_up = Quartz.CGEventCreateKeyboardEvent(None, keycode, False)
+    if flags:
+        flag_mask = 0
+        for f in flags:
+            flag_mask |= f
+        Quartz.CGEventSetFlags(ev_down, flag_mask)
+        Quartz.CGEventSetFlags(ev_up, flag_mask)
+    Quartz.CGEventPost(Quartz.kCGSessionEventTap, ev_down)
+    Quartz.CGEventPost(Quartz.kCGSessionEventTap, ev_up)
 
 def simulate_media_key(key):
     try:
         if not _ax_ok(): return
+        if key == "browser_back":
+            simulate_key_combo(33, [Quartz.kCGEventFlagMaskCommand])
+            return
+        elif key == "browser_forward":
+            simulate_key_combo(30, [Quartz.kCGEventFlagMaskCommand])
+            return
+        elif key == "mission_control":
+            simulate_key_combo(126, [Quartz.kCGEventFlagMaskControl])
+            return
+        elif key == "app_expose":
+            simulate_key_combo(125, [Quartz.kCGEventFlagMaskControl])
+            return
+        elif key == "space_left":
+            simulate_key_combo(123, [Quartz.kCGEventFlagMaskControl])
+            return
+        elif key == "space_right":
+            simulate_key_combo(124, [Quartz.kCGEventFlagMaskControl])
+            return
+
         keys = {
             "play_pause": 16,
             "next": 17,

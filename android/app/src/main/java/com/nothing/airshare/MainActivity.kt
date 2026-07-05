@@ -660,9 +660,32 @@ class MainActivity : AppCompatActivity() {
             return sum / e.pointerCount
         }
 
+        var maxPointers = 1
+
+        val gestureDetector = android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (maxPointers == 2 || maxPointers == 3) {
+                    if (Math.abs(velocityX) > Math.abs(velocityY)) {
+                        if (velocityX > 1500) MacSession.sendMediaKey(if (maxPointers == 2) "browser_back" else "space_left")
+                        else if (velocityX < -1500) MacSession.sendMediaKey(if (maxPointers == 2) "browser_forward" else "space_right")
+                    } else {
+                        if (maxPointers == 3) {
+                            if (velocityY > 1500) MacSession.sendMediaKey("app_expose")
+                            else if (velocityY < -1500) MacSession.sendMediaKey("mission_control")
+                        }
+                    }
+                    return true
+                }
+                return false
+            }
+        })
+
         binding.trackpadSurface.setOnTouchListener { _, event ->
+            gestureDetector.onTouchEvent(event)
+
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    maxPointers = 1
                     downX = event.x; downY = event.y
                     lastX = event.x; lastY = event.y
                     downTime = System.currentTimeMillis()
@@ -677,6 +700,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 MotionEvent.ACTION_POINTER_DOWN -> {
+                    maxPointers = Math.max(maxPointers, event.pointerCount)
                     isTwoFinger = true
                     twoFingerMoved = false
                     twoFingerLastX = centroid(event, true)

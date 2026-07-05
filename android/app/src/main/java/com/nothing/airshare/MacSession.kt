@@ -160,6 +160,7 @@ object MacSession {
             "ping" -> sendJson(JSONObject().apply { put("type", "pong") })
             "pong" -> { /* liveness refreshed via lastRx */ }
             "hello" -> Log.d(TAG, "Handshake with ${msg.optString("name", "Mac")}")
+            "find_phone" -> appContext?.sendBroadcast(android.content.Intent("clipper.ring").setPackage(appContext?.packageName))
         }
     }
 
