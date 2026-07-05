@@ -9,6 +9,11 @@ __pycache__/
 # macOS metadata
 .DS_Store
 
+# Runtime logs
+*.log
+app_log.txt
+app_run.log
+
 
 # Android build outputs and caches
 .gradle/
