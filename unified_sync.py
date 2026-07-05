@@ -47,20 +47,29 @@ def recv_exact(sock, n):
         data.extend(chunk)
     return bytes(data)
 
-def move_mouse(dx, dy):
+_ax_trusted = None
+def _ax_ok():
+    global _ax_trusted
+    if _ax_trusted: return True
+    if AXIsProcessTrusted():
+        _ax_trusted = True
+        return True
+    
     global last_accessibility_warning_time
+    now = time.time()
+    if now - last_accessibility_warning_time > 60:
+        last_accessibility_warning_time = now
+        print("[Accessibility] Missing permission")
+        send_mac_notification(
+            "Accessibility Permission Required",
+            "Please enable Python/Terminal in System Settings -> Privacy & Security -> Accessibility."
+        )
+        AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+    return False
+
+def move_mouse(dx, dy):
     try:
-        if not AXIsProcessTrusted():
-            now = time.time()
-            if now - last_accessibility_warning_time > 60:
-                last_accessibility_warning_time = now
-                print("[Mouse Control] Missing Accessibility permission")
-                send_mac_notification(
-                    "Accessibility Permission Required",
-                    "Please enable Python/Terminal in System Settings -> Privacy & Security -> Accessibility."
-                )
-                AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
-            return
+        if not _ax_ok(): return
         loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
         new_x = loc.x + dx * 1.5
         new_y = loc.y + dy * 1.5
@@ -70,19 +79,8 @@ def move_mouse(dx, dy):
         print(f"[Mouse Control] Error: {e}")
 
 def click_mouse():
-    global last_accessibility_warning_time
     try:
-        if not AXIsProcessTrusted():
-            now = time.time()
-            if now - last_accessibility_warning_time > 60:
-                last_accessibility_warning_time = now
-                print("[Mouse Control] Missing Accessibility permission")
-                send_mac_notification(
-                    "Accessibility Permission Required",
-                    "Please enable Python/Terminal in System Settings -> Privacy & Security -> Accessibility."
-                )
-                AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
-            return
+        if not _ax_ok(): return
         loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
         down = CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, (loc.x, loc.y), kCGMouseButtonLeft)
         up = CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, (loc.x, loc.y), kCGMouseButtonLeft)
@@ -91,40 +89,67 @@ def click_mouse():
     except Exception as e:
         print(f"[Mouse Control] Error: {e}")
 
+def set_mouse_button(down):
+    try:
+        if not _ax_ok(): return
+        loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        ev_type = Quartz.kCGEventLeftMouseDown if down else Quartz.kCGEventLeftMouseUp
+        ev = Quartz.CGEventCreateMouseEvent(None, ev_type, loc, Quartz.kCGMouseButtonLeft)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+    except Exception as e: pass
+
+def right_click_mouse():
+    try:
+        if not _ax_ok(): return
+        loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        down = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventRightMouseDown, loc, Quartz.kCGMouseButtonRight)
+        up = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventRightMouseUp, loc, Quartz.kCGMouseButtonRight)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+    except Exception as e: pass
+
+def scroll_wheel(dx, dy):
+    try:
+        if not _ax_ok(): return
+        loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        ev = Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitPixel, 2, int(dy * 15), int(dx * 15))
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+    except Exception as e:
+        print(f"[Scroll] Error: {e}")
+
+def _post_aux_key(key_code):
+    NX_SYSDEFINED = 8
+    event = Quartz.CGEventCreate(None)
+    loc = Quartz.CGEventGetLocation(event)
+    ev_down = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventOtherMouseDown, loc, 0)
+    Quartz.CGEventSetType(ev_down, NX_SYSDEFINED)
+    Quartz.CGEventSetIntegerValueField(ev_down, Quartz.kCGEventSourceUserData, 0)
+    Quartz.CGEventSetIntegerValueField(ev_down, Quartz.kCGKeyboardEventAutorepeat, 0)
+    Quartz.CGEventSetIntegerValueField(ev_down, 109, (key_code << 16) | (0xa << 8))
+    ev_up = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventOtherMouseUp, loc, 0)
+    Quartz.CGEventSetType(ev_up, NX_SYSDEFINED)
+    Quartz.CGEventSetIntegerValueField(ev_up, Quartz.kCGEventSourceUserData, 0)
+    Quartz.CGEventSetIntegerValueField(ev_up, Quartz.kCGKeyboardEventAutorepeat, 0)
+    Quartz.CGEventSetIntegerValueField(ev_up, 109, (key_code << 16) | (0xb << 8))
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_down)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_up)
+
 def simulate_media_key(key):
     try:
-        if key == "play_pause":
-            cmd = """
-            try
-                tell application "Spotify" to playpause
-            end try
-            try
-                tell application "Music" to playpause
-            end try
-            """
-            subprocess.run(["osascript", "-e", cmd], capture_output=True)
-        elif key == "next":
-            cmd = """
-            try
-                tell application "Spotify" to next track
-            end try
-            try
-                tell application "Music" to next track
-            end try
-            """
-            subprocess.run(["osascript", "-e", cmd], capture_output=True)
-        elif key == "prev":
-            cmd = """
-            try
-                tell application "Spotify" to previous track
-            end try
-            try
-                tell application "Music" to previous track
-            end try
-            """
-            subprocess.run(["osascript", "-e", cmd], capture_output=True)
+        if not _ax_ok(): return
+        keys = {
+            "play_pause": 16,
+            "next": 17,
+            "prev": 18,
+            "vol_up": 0,
+            "vol_down": 1,
+            "mute": 7
+        }
+        code = keys.get(key)
+        if code is not None:
+            _post_aux_key(code)
     except Exception as e:
-        print(f"[Media Control] Error: {e}")
+        print(f"[Media] Error: {e}")
 
 # Ensure Homebrew and common directories are in PATH for subprocess calls
 for p in ["/opt/homebrew/bin", "/usr/local/bin"]:
@@ -424,10 +449,16 @@ def handle_mac_incoming_connection(conn):
                 session.last_rx = time.time()
 
             if first_byte == b'\x01':
-                # Binary mouse_move protocol (L3) — ultra low-latency
+                # Binary mouse_move protocol (L3)
                 move_data = recv_exact(conn, 8)  # 2x float32
                 dx, dy = struct.unpack('!ff', move_data)
                 move_mouse(dx, dy)
+                continue
+            elif first_byte == b'\x02':
+                # Binary scroll protocol
+                scroll_data = recv_exact(conn, 8)
+                dx, dy = struct.unpack('!ff', scroll_data)
+                scroll_wheel(dx, dy)
                 continue
 
             # Standard JSON protocol: first byte is part of 4-byte length prefix
@@ -486,6 +517,16 @@ def handle_mac_incoming_connection(conn):
                 move_mouse(dx, dy)
             elif msg_type == "mouse_click":
                 click_mouse()
+            elif msg_type == "mouse_down":
+                set_mouse_button(True)
+            elif msg_type == "mouse_up":
+                set_mouse_button(False)
+            elif msg_type == "mouse_right_click":
+                right_click_mouse()
+            elif msg_type == "scroll":
+                dx = data.get("dx", 0.0)
+                dy = data.get("dy", 0.0)
+                scroll_wheel(dx, dy)
             elif msg_type == "media_key":
                 key = data.get("key")
                 simulate_media_key(key)

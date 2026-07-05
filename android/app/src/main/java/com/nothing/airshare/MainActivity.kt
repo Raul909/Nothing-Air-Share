@@ -29,6 +29,16 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.InetAddress
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.pm.PackageManager
+import android.os.PowerManager
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.provider.Settings
+import android.view.ViewConfiguration
+import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -45,6 +55,12 @@ class MainActivity : AppCompatActivity() {
             updateDeviceListUI()
             handler.postDelayed(this, 1000)
         }
+    }
+
+    // Notification permission (Android 13+) — needed so the keep-alive foreground service
+    // can show its ongoing notification. We (re)start the service once resolved.
+    private val notifPermLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+        SyncService.start(this)
     }
 
     // Register a file picker launcher for direct P2P transfer
@@ -92,12 +108,7 @@ class MainActivity : AppCompatActivity() {
 
         // 1. Ask for notification permission (Android 13+) so the foreground
         //    service notification is visible, then start the always-on sync service.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
-            }
-        }
+        ensureBackgroundPermissions()
         SyncService.start(this)
 
         // 2. Networking (NSD discovery, TCP server, duplex Mac session, clipboard &
@@ -328,54 +339,16 @@ class MainActivity : AppCompatActivity() {
             binding.overlayMedia.visibility = View.GONE
         }
 
-        // --- Trackpad touch handling ---
-        var lastX = 0f
-        var lastY = 0f
-        var downTime = 0L
-        var hasMoved = false
-
-        binding.trackpadSurface.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    lastX = event.x
-                    lastY = event.y
-                    downTime = System.currentTimeMillis()
-                    hasMoved = false
-                    
-                    binding.trackpadCursor.x = event.x - 12f
-                    binding.trackpadCursor.y = event.y - 12f
-                    binding.trackpadCursor.visibility = View.VISIBLE
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.x - lastX
-                    val dy = event.y - lastY
-                    lastX = event.x
-                    lastY = event.y
-                    
-                    if (Math.abs(dx) > 0.5f || Math.abs(dy) > 0.5f) {
-                        hasMoved = true
-                        sendTrackpadMoveBinary(dx, dy)  // Binary protocol for low latency (L3)
-                    }
-                    
-                    binding.trackpadCursor.x = event.x - 12f
-                    binding.trackpadCursor.y = event.y - 12f
-                }
-                MotionEvent.ACTION_UP -> {
-                    binding.trackpadCursor.visibility = View.INVISIBLE
-                    flushPendingMouseMove()  // Flush any coalesced moves (L3)
-                    val duration = System.currentTimeMillis() - downTime
-                    if (duration < 300 && !hasMoved) {
-                        sendTrackpadClick()
-                    }
-                }
-            }
-            true
-        }
+        // --- Trackpad: full MacBook-style multi-touch gestures ---
+        setupTrackpadGestures()
 
         // --- Media button handlers ---
         binding.btnPlayPause.setOnClickListener { MacSession.sendMediaKey("play_pause") }
         binding.btnPrev.setOnClickListener { MacSession.sendMediaKey("prev") }
         binding.btnNext.setOnClickListener { MacSession.sendMediaKey("next") }
+        binding.btnVolDown.setOnClickListener { MacSession.sendMediaKey("vol_down") }
+        binding.btnMute.setOnClickListener { MacSession.sendMediaKey("mute") }
+        binding.btnVolUp.setOnClickListener { MacSession.sendMediaKey("vol_up") }
 
         // --- System Utilities (Wireless Debugging) ---
         binding.btnWirelessDebugging.setOnClickListener {
@@ -626,40 +599,192 @@ class MainActivity : AppCompatActivity() {
         binding.drawerAbout.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f * scale)
     }
 
-    // ── Trackpad input → MacSession (binary mouse-move fast path) ─────────────
-    // Coalesce moves within a ~16ms window (~60fps) on the main thread, then hand
-    // off to MacSession, which performs the socket write on its own sender thread.
+    // ---------------------------------------------------------------------------------
+    // Trackpad — MacBook-style multi-touch. Tap = left click, two-finger tap = right
+    // click, two-finger drag = scroll, double-tap-then-drag = click-and-drag, all with
+    // haptics. Pointer acceleration is applied on the Mac side so raw deltas stay small.
+    // ---------------------------------------------------------------------------------
+
     private var pendingDx = 0f
     private var pendingDy = 0f
-    private var lastMouseSendTime = 0L
+    private var pendingOpcode: Byte = 0x01
     private var flushScheduled = false
-    private val MOUSE_COALESCE_MS = 16L
+    private var lastDeltaSendTime = 0L
+    private val COALESCE_MS = 12L
 
-    private fun sendTrackpadMoveBinary(dx: Float, dy: Float) {
-        pendingDx += dx
-        pendingDy += dy
-        val now = System.currentTimeMillis()
-        if (now - lastMouseSendTime >= MOUSE_COALESCE_MS) {
-            flushPendingMouseMove()
-        } else if (!flushScheduled) {
-            flushScheduled = true
-            handler.postDelayed({ flushPendingMouseMove() }, MOUSE_COALESCE_MS - (now - lastMouseSendTime))
+    private val vibrator: Vibrator? by lazy {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION") getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
+        } catch (e: Exception) { null }
+    }
+
+    private fun hapticTick(ms: Long = 12L) {
+        val v = vibrator ?: return
+        if (!v.hasVibrator()) return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION") v.vibrate(ms)
+            }
+        } catch (_: Exception) {}
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupTrackpadGestures() {
+        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+        val tapTimeout = 260L
+        val doubleTapWindow = ViewConfiguration.getDoubleTapTimeout().toLong()
+
+        var downX = 0f; var downY = 0f
+        var lastX = 0f; var lastY = 0f
+        var downTime = 0L
+        var movedBeyondSlop = false
+
+        var isTwoFinger = false
+        var twoFingerLastX = 0f; var twoFingerLastY = 0f
+        var twoFingerMoved = false
+
+        var lastTapUpTime = 0L
+        var lastTapUpX = 0f; var lastTapUpY = 0f
+        var armedForDragTap = false
+        var isDragging = false
+
+        fun centroid(e: MotionEvent, axisX: Boolean): Float {
+            var sum = 0f
+            for (i in 0 until e.pointerCount) sum += if (axisX) e.getX(i) else e.getY(i)
+            return sum / e.pointerCount
+        }
+
+        binding.trackpadSurface.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x; downY = event.y
+                    lastX = event.x; lastY = event.y
+                    downTime = System.currentTimeMillis()
+                    movedBeyondSlop = false
+                    isTwoFinger = false
+                    twoFingerMoved = false
+                    armedForDragTap = (downTime - lastTapUpTime) <= doubleTapWindow &&
+                        Math.hypot((event.x - lastTapUpX).toDouble(), (event.y - lastTapUpY).toDouble()) <= touchSlop * 3
+                    binding.trackpadCursor.x = event.x - 12f
+                    binding.trackpadCursor.y = event.y - 12f
+                    binding.trackpadCursor.visibility = View.VISIBLE
+                }
+
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    isTwoFinger = true
+                    twoFingerMoved = false
+                    twoFingerLastX = centroid(event, true)
+                    twoFingerLastY = centroid(event, false)
+                    binding.trackpadCursor.visibility = View.INVISIBLE
+                    if (isDragging) { MacSession.sendMouseUp(); isDragging = false }
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    if (isTwoFinger && event.pointerCount >= 2) {
+                        val cx = centroid(event, true); val cy = centroid(event, false)
+                        val sdx = cx - twoFingerLastX; val sdy = cy - twoFingerLastY
+                        twoFingerLastX = cx; twoFingerLastY = cy
+                        if (Math.abs(sdx) > 0.5f || Math.abs(sdy) > 0.5f) {
+                            if (Math.hypot((cx - downX).toDouble(), (cy - downY).toDouble()) > touchSlop) twoFingerMoved = true
+                            queueDelta(0x02, sdx, sdy)
+                        }
+                    } else if (!isTwoFinger) {
+                        val dx = event.x - lastX; val dy = event.y - lastY
+                        lastX = event.x; lastY = event.y
+                        if (!movedBeyondSlop &&
+                            Math.hypot((event.x - downX).toDouble(), (event.y - downY).toDouble()) > touchSlop) {
+                            movedBeyondSlop = true
+                            if (armedForDragTap && !isDragging) {
+                                MacSession.sendMouseDown(); isDragging = true; hapticTick(18)
+                            }
+                        }
+                        if (movedBeyondSlop) queueDelta(0x01, dx, dy)
+                        binding.trackpadCursor.x = event.x - 12f
+                        binding.trackpadCursor.y = event.y - 12f
+                    }
+                }
+
+                MotionEvent.ACTION_UP -> {
+                    binding.trackpadCursor.visibility = View.INVISIBLE
+                    handler.post { flushDeltaNow() }
+                    val duration = System.currentTimeMillis() - downTime
+                    if (isDragging) {
+                        MacSession.sendMouseUp(); isDragging = false; hapticTick(14)
+                    } else if (isTwoFinger) {
+                        if (!twoFingerMoved && duration < tapTimeout) { MacSession.sendMouseRightClick(); hapticTick(16) }
+                    } else if (!movedBeyondSlop && duration < tapTimeout) {
+                        MacSession.sendMouseClick(); hapticTick(12)
+                        lastTapUpTime = System.currentTimeMillis()
+                        lastTapUpX = event.x; lastTapUpY = event.y
+                    }
+                    armedForDragTap = false
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    binding.trackpadCursor.visibility = View.INVISIBLE
+                    if (isDragging) { MacSession.sendMouseUp(); isDragging = false }
+                    armedForDragTap = false
+                }
+            }
+            true
         }
     }
 
-    private fun flushPendingMouseMove() {
-        flushScheduled = false
-        val dx = pendingDx
-        val dy = pendingDy
-        if (dx == 0f && dy == 0f) return
-        pendingDx = 0f
-        pendingDy = 0f
-        lastMouseSendTime = System.currentTimeMillis()
-        MacSession.sendMouseMoveBinary(dx, dy)
+    private fun queueDelta(opcode: Byte, dx: Float, dy: Float) {
+        handler.post {
+            if (pendingOpcode != opcode) {
+                flushDeltaNow()
+                pendingOpcode = opcode
+            }
+            pendingDx += dx
+            pendingDy += dy
+            if (!flushScheduled) {
+                flushScheduled = true
+                val now = System.currentTimeMillis()
+                val wait = (COALESCE_MS - (now - lastDeltaSendTime)).coerceIn(0L, COALESCE_MS)
+                handler.postDelayed({ flushDeltaNow() }, wait)
+            }
+        }
     }
 
-    private fun sendTrackpadClick() {
-        MacSession.sendMouseClick()
+    private fun flushDeltaNow() {
+        flushScheduled = false
+        val dx = pendingDx; val dy = pendingDy
+        pendingDx = 0f; pendingDy = 0f
+        if (dx == 0f && dy == 0f) return
+        lastDeltaSendTime = System.currentTimeMillis()
+        MacSession.sendDeltaBinary(pendingOpcode, dx, dy)
+    }
+
+    private fun ensureBackgroundPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        val prefs = getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("asked_batt_opt", false)) {
+            prefs.edit().putBoolean("asked_batt_opt", true).apply()
+            requestBatteryOptimizationExemption()
+        }
+    }
+
+    private fun requestBatteryOptimizationExemption() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:\$packageName")
+                })
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Battery optimization request failed: \${e.message}")
+        }
     }
 
     override fun onDestroy() {

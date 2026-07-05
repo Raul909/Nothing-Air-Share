@@ -11,9 +11,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.ServiceCompat
 import java.net.InetAddress
@@ -31,8 +33,11 @@ class SyncService : Service(), NsdHelper.NsdListener {
     private var clipboard: ClipboardManager? = null
     private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
     private var batteryReceiver: BroadcastReceiver? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     companion object {
+        const val TAG = "SyncService"
         const val CHANNEL_ID = "nothing_airshare_sync"
         const val NOTIF_ID = 42
 
@@ -73,6 +78,9 @@ class SyncService : Service(), NsdHelper.NsdListener {
         // 4. Bridges
         registerClipboardListener()
         registerBatteryReceiver()
+
+        // 5. Background Keep-Alive Locks
+        acquireLocks()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -84,6 +92,7 @@ class SyncService : Service(), NsdHelper.NsdListener {
 
     override fun onDestroy() {
         super.onDestroy()
+        releaseLocks()
         clipListener?.let { clipboard?.removePrimaryClipChangedListener(it) }
         batteryReceiver?.let { runCatching { unregisterReceiver(it) } }
         nsdHelper.stop()
@@ -146,6 +155,47 @@ class SyncService : Service(), NsdHelper.NsdListener {
         }
         registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         batteryReceiver = receiver
+    }
+
+    // ── Background Keep-Alive Locks ───────────────────────────────────────────
+
+    private fun acquireLocks() {
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            else
+                @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            wifiLock = wifiManager.createWifiLock(mode, "NothingAirShare:wifi").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            Log.d(TAG, "Wi-Fi lock acquired (mode=\$mode)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire Wi-Fi lock: \${e.message}")
+        }
+
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NothingAirShare:sync").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            Log.d(TAG, "Partial wake lock acquired")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire wake lock: \${e.message}")
+        }
+    }
+
+    private fun releaseLocks() {
+        try {
+            wifiLock?.let { if (it.isHeld) it.release() }
+        } catch (_: Exception) {}
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+        } catch (_: Exception) {}
+        wifiLock = null
+        wakeLock = null
     }
 
     // ── Notification ──────────────────────────────────────────────────────────

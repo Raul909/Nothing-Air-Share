@@ -635,6 +635,56 @@
 
                 <Space
                     android:layout_width="match_parent"
+                    android:layout_height="16dp" />
+
+                <!-- Volume controls row -->
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center"
+                    android:layout_gravity="center_horizontal">
+
+                    <TextView
+                        android:id="@+id/btnVolDown"
+                        android:layout_width="64dp"
+                        android:layout_height="64dp"
+                        android:text="🔉"
+                        android:textSize="28sp"
+                        android:textColor="@color/foreground"
+                        android:gravity="center"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:background="?android:attr/selectableItemBackgroundBorderless" />
+
+                    <TextView
+                        android:id="@+id/btnMute"
+                        android:layout_width="80dp"
+                        android:layout_height="80dp"
+                        android:text="🔇"
+                        android:textSize="28sp"
+                        android:textColor="@color/foreground"
+                        android:gravity="center"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:background="?android:attr/selectableItemBackgroundBorderless"
+                        android:layout_marginHorizontal="24dp" />
+
+                    <TextView
+                        android:id="@+id/btnVolUp"
+                        android:layout_width="64dp"
+                        android:layout_height="64dp"
+                        android:text="🔊"
+                        android:textSize="28sp"
+                        android:textColor="@color/foreground"
+                        android:gravity="center"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:background="?android:attr/selectableItemBackgroundBorderless" />
+                </LinearLayout>
+
+                <Space
+                    android:layout_width="match_parent"
                     android:layout_height="0dp"
                     android:layout_weight="1.2" />
             </LinearLayout>

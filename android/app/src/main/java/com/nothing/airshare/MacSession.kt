@@ -195,16 +195,28 @@ object MacSession {
         sendJson(JSONObject().apply { put("type", "mouse_click") })
     }
 
-    /** Binary mouse-move fast path: 0x01 + dx + dy (float32 BE) = 9 bytes. */
-    fun sendMouseMoveBinary(dx: Float, dy: Float) {
+    fun sendMouseRightClick() {
+        sendJson(JSONObject().apply { put("type", "mouse_right_click") })
+    }
+
+    fun sendMouseDown() {
+        sendJson(JSONObject().apply { put("type", "mouse_down") })
+    }
+
+    fun sendMouseUp() {
+        sendJson(JSONObject().apply { put("type", "mouse_up") })
+    }
+
+    /** Binary move/scroll fast path: 1-byte opcode + dx + dy (float32 BE) = 9 bytes. */
+    fun sendDeltaBinary(opcode: Byte, dx: Float, dy: Float) {
         sender.execute {
             val out = dos ?: return@execute
             try {
                 val buf = ByteBuffer.allocate(9).order(ByteOrder.BIG_ENDIAN)
-                buf.put(0x01.toByte()); buf.putFloat(dx); buf.putFloat(dy)
+                buf.put(opcode); buf.putFloat(dx); buf.putFloat(dy)
                 out.write(buf.array()); out.flush()
             } catch (e: Exception) {
-                Log.e(TAG, "mouse move failed: ${e.message}"); closeSocket()
+                Log.e(TAG, "binary delta failed: ${e.message}"); closeSocket()
             }
         }
     }
