@@ -100,34 +100,19 @@ Once the Mac daemon is running and connected (see below):
 
 ### Prerequisites
 - macOS 12 Monterey or later
-- [Homebrew](https://brew.sh) installed
-- Python 3.9+
+- [Homebrew](https://brew.sh) installed (The setup script will install it for you if missing)
 
-### Step-by-Step Installation
+### One-Click Installation
 
-**1. Install ADB (Android Debug Bridge)**
-```bash
-brew install android-platform-tools
-```
+For the simplest experience, we provide an automated setup script that compiles the python daemon into a native macOS Application (`.app`).
 
-**2. Clone this repository**
-```bash
-git clone https://github.com/Raul909/Nothing-Air-Share.git ~/Nothing-Air-Share
-```
+1. **Clone or Download this repository** to your Mac.
+2. Open the folder and **double-click `setup_mac.command`**.
+   *(Note: The first time, you may need to right-click -> Open -> Open, since it's an unverified script from the internet).*
+3. The script will automatically install dependencies and bundle the app.
+4. Once finished, **Nothing AirShare.app** will be installed in your `/Applications` folder!
 
-**3. Create a Python virtual environment and install dependencies**
-```bash
-cd ~/Nothing-Air-Share
-python3 -m venv .venv && source .venv/bin/activate
-pip install pyobjc-framework-Cocoa pyobjc-framework-Quartz pyobjc-framework-Accessibility pyobjc-framework-ApplicationServices watchdog Pillow
-```
-
-**4. Launch the daemon**
-```bash
-python3 unified_sync.py
-```
-
-A **Nothing Dot (`⚫️`)** will appear in your Mac's menu bar. Click it to open the Popover panel!
+You can now launch it anytime from Launchpad or Finder. A **Nothing Dot (`⚫️`)** will appear in your Mac's menu bar. Click it to open the Popover panel!
 
 ---
 
@@ -218,50 +203,26 @@ Toggle **Do Not Disturb** on your Mac → your Nothing Phone's DND / Zen Mode fo
 
 ## ⚙️ Keep It Running (Run on Mac Startup)
 
-### Option A — LaunchAgent (Recommended)
+Since Nothing AirShare is now a native `.app`, setting it to run at login is incredibly simple!
 
-This makes the daemon start automatically every time you log in and restart it if it crashes:
+**To launch automatically on startup:**
+1. Open **System Settings** on your Mac.
+2. Navigate to **General > Login Items**.
+3. Click the `+` button under "Open at Login".
+4. Select **Nothing AirShare.app** from your `/Applications` folder.
 
-**Install:**
-```bash
-# Copy the LaunchAgent plist (edit paths if you cloned elsewhere)
-cp ~/Nothing-Air-Share/com.nothing.clipboard-sync.plist ~/Library/LaunchAgents/
-
-# Load it
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nothing.clipboard-sync.plist
-```
-
-That's it — the `⚫️` dot will appear in your menu bar on every login.
-
-**Check logs:**
-```bash
-# Stdout log
-cat /tmp/nothing_clipboard_sync.log
-
-# Error log
-cat /tmp/nothing_clipboard_sync.err
-```
-
-**Uninstall / Stop:**
-```bash
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.nothing.clipboard-sync.plist
-rm ~/Library/LaunchAgents/com.nothing.clipboard-sync.plist
-```
-
-### Option B — Run Manually When Needed
-```bash
-cd ~/Nothing-Air-Share
-source .venv/bin/activate
-python3 unified_sync.py
-```
-Press `Ctrl+C` to stop. The `⚫️` dot disappears from the menu bar.
-
-> **Why not a `.dmg`?**
-> The macOS component uses `pyobjc` (Python-to-Cocoa bridge) and requires `adb` (Android platform tools). Bundling these into a standalone `.app` with PyInstaller/py2app produces a 200+ MB package that macOS Gatekeeper blocks without an Apple Developer Certificate ($99/yr for code-signing). The LaunchAgent approach is lighter, more transparent, and auto-updates when you `git pull`.
+That's it — the `⚫️` dot will quietly appear in your menu bar every time you turn on your Mac.
 
 ---
 
 ## 📋 Changelog
+
+### v2.9.0 — Unified Transport & Native macOS App
+
+**Native macOS Experience**
+- Bundled the Python daemon into a native standalone `Nothing AirShare.app` using PyInstaller.
+- App runs natively in the background (Menu Bar Accessory mode) with no Terminal required.
+- Easy 1-click installation via `setup_mac.command`.
 
 ### v2.8.0 — Connection Stability, Menu Bar Sync & Latency Optimization
 
