@@ -12,7 +12,7 @@
 
 *Featuring a custom, minimalist Nothing OS-inspired dot-matrix adaptive icon designed with transparency. It dynamically inverts between light and dark themes to fit perfectly in your browser or phone launcher! Showcasing open-source collaboration and creative interface design.*
 
-[![Download Latest APK](apk/download_latest.svg?v=2.8.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+[![Download Latest APK](apk/download_latest.svg?v=2.9.1)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
 <p align="center">
   <a href="https://github.com/Raul909/Nothing-Air-Share/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/Raul909/Nothing-Air-Share?style=for-the-badge&color=e60012&label=latest"></a>
@@ -59,7 +59,7 @@ Apple keeps AirDrop and Universal Clipboard locked to Apple devices — so your 
     │                    │                   │                      │
     │  NothingAirShare   │                   │  No app required —   │
     │  Companion App     │                   │  uses native AirDrop │
-    │  (APK v2.8.0)      │                   │  & Universal         │
+    │  (APK v2.9.1)      │                   │  & Universal         │
     │                    │                   │  Clipboard           │
     └────────────────────┘                   └──────────────────────┘
 ```
@@ -79,10 +79,10 @@ Apple keeps AirDrop and Universal Clipboard locked to Apple devices — so your 
 ### Option A — Direct Download (Recommended)
 1. Download the latest version to your phone:
 
-   [![Download Latest APK](apk/download_latest.svg?v=2.8.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+   [![Download Latest APK](apk/download_latest.svg?v=2.9.1)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
    **Previous Version:**
-   [![v2.7.1](apk/version_v2.7.1.svg?v=2.8.0)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.7.1/NothingAirShare.apk)
+   [![v2.9.0](apk/version_v2.9.0.svg?v=2.9.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.9.0/NothingAirShare.apk)
 
 2. Open the downloaded file on your Nothing Phone
 3. Tap **Install** (you may need to allow "Install from unknown sources" for your browser)
@@ -191,7 +191,7 @@ All received files are indexed by **Spotlight** — find them instantly with `Cm
 |---|---|
 | **SEND FILES** | Opens the file picker to send a file to your Mac via Wi-Fi P2P or ADB |
 | **CLIPBOARD SYNC** | Expands an inline text field — type and tap **COPY TO SYNC** to push to Mac |
-| **REMOTE INPUT** | Opens a full-screen trackpad — control your Mac's cursor wirelessly (Requires Accessibility permission on Mac) |
+| **REMOTE INPUT** | Opens a full-screen trackpad with **Multi-Touch Gestures**: <br>• 1-Finger Tap: Left Click <br>• 2-Finger Tap: Right Click <br>• 2-Finger Swipe Left/Right: Browser Back/Forward <br>• 3-Finger Swipe Up/Down: Mission Control / App Exposé <br>• 3-Finger Swipe Left/Right: Change Desktop Spaces |
 | **MEDIA REMOTE** | Control Mac media playback (Play/Pause, Next, Previous) wirelessly |
 | **☰ Drawer** | Slide open to see discovered nearby devices, settings, and about info |
 | **⚙ Settings Overlay** | Customize options including: <br>• **Font Size Scaling**: Toggle SMALL, MEDIUM (default), or LARGE font scaling sizes globally in real-time. <br>• **⚙ Wireless Debugging Button**: Launches Android system Wireless Debugging / developer options panel. |
@@ -216,6 +216,13 @@ That's it — the `⚫️` dot will quietly appear in your menu bar every time y
 ---
 
 ## 📋 Changelog
+
+### v2.9.1 — Remote Gestures & Media Fixes
+**Multi-Touch Gestures**
+- Trackpad now supports 2-finger horizontal swipes for **Browser Back/Forward**.
+- Added 3-finger swipe gestures for **Mission Control, App Exposé, and Space Switching**.
+- Fixed macOS media keys (Play/Pause/Volume) not registering on modern macOS versions.
+- Fixed "Find Phone" alert missing in the new TCP transport.
 
 ### v2.9.0 — Unified Transport & Native macOS App
 
