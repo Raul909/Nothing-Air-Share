@@ -485,6 +485,9 @@ class MainActivity : AppCompatActivity() {
         val pendingFiles = targetDir.listFiles()?.filter { it.isFile } ?: emptyList()
 
         if (discoveredDevices.isEmpty() && pendingFiles.isEmpty()) {
+            // Detach first — tvNoDevices is a shared view and re-adding it while it
+            // still has a parent throws IllegalStateException (this runs every 1s).
+            (binding.tvNoDevices.parent as? android.view.ViewGroup)?.removeView(binding.tvNoDevices)
             binding.llDevicesContainer.addView(binding.tvNoDevices)
             binding.tvStatusLabel.text = "AIRDROP SHARING ACTIVE"
             return
