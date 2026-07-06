@@ -82,7 +82,7 @@ Apple keeps AirDrop and Universal Clipboard locked to Apple devices — so your 
    [![Download Latest APK](apk/download_latest.svg?v=2.9.1)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
    **Previous Version:**
-   [![v2.9.0](apk/version_v2.9.0.svg?v=2.9.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.9.0/NothingAirShare.apk)
+   [![v2.9.1](apk/version_v2.9.1.svg?v=2.9.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.9.1/NothingAirShare.apk)
 
 2. Open the downloaded file on your Nothing Phone
 3. Tap **Install** (you may need to allow "Install from unknown sources" for your browser)
@@ -224,7 +224,7 @@ That's it — the `⚫️` dot will quietly appear in your menu bar every time y
 - Fixed macOS media keys (Play/Pause/Volume) not registering on modern macOS versions.
 - Fixed "Find Phone" alert missing in the new TCP transport.
 
-### v2.9.0 — Unified Transport & Native macOS App
+### v2.9.1 — Unified Transport & Native macOS App
 
 **Native macOS Experience**
 - Bundled the Python daemon into a native standalone `Nothing AirShare.app` using PyInstaller.

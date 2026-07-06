@@ -3,7 +3,7 @@
 All notable changes to **Nothing AirShare**. The newest build is always on the
 [Releases page](https://github.com/Raul909/Nothing-Air-Share/releases/latest).
 
-## v2.9.0 — Background Reliability, Trackpad Overhaul & Universal Media
+## v2.9.1 — Background Reliability, Trackpad Overhaul & Universal Media
 
 **Background Connection** *(fixes "wireless debugging keeps stopping" + clipboard dropping out)*
 - New persistent **foreground service** holds a high-performance **Wi-Fi lock** + wake lock, so the link survives screen-off and Doze instead of dying in the background

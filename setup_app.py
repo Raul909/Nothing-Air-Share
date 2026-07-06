@@ -9,8 +9,8 @@ OPTIONS = {
         'CFBundleName': 'Nothing AirShare',
         'CFBundleDisplayName': 'Nothing AirShare',
         'CFBundleIdentifier': "com.nothing.airshare.mac",
-        'CFBundleVersion': "2.9.0",
-        'CFBundleShortVersionString': "2.9.0",
+        'CFBundleVersion': "2.9.1",
+        'CFBundleShortVersionString': "2.9.1",
     }
 }
 
