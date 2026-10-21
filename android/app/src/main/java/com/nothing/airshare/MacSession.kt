@@ -49,6 +49,11 @@ object MacSession {
     @Volatile private var connected = false
     @Volatile private var lastRx = 0L
     private var worker: Thread? = null
+    // Bumped on every start()/stop(). A worker only runs while its generation is
+    // current, so a quick stop()+start() can't leave two loops connecting at once.
+    @Volatile private var generation = 0
+    // Wakes the reconnect backoff early (network came back, new target).
+    private val retrySignal = Object()
 
     // Echo-suppression: the last clipboard text we sent or applied, so the local
     // clipboard listener doesn't bounce a value we just synced back to the Mac.
@@ -56,6 +61,9 @@ object MacSession {
 
     /** Notified on the main thread when the connection state flips. */
     var connectionListener: ((connected: Boolean) -> Unit)? = null
+
+    /** Invoked on the session thread right after each successful handshake. */
+    @Volatile var onConnected: (() -> Unit)? = null
 
     val isConnected: Boolean get() = connected
 
@@ -71,35 +79,49 @@ object MacSession {
         targetPort = port
         Log.d(TAG, "Target set to $host:$port")
         start()
+        if (!connected) reconnectNow()
     }
 
     @Synchronized
     fun start() {
         if (running) return
         running = true
-        worker = thread(name = "MacSession") { runLoop() }
+        val gen = ++generation
+        worker = thread(name = "MacSession") { runLoop(gen) }
     }
 
     @Synchronized
     fun stop() {
         running = false
+        generation++
+        reconnectNow()
         closeSocket()
+        setConnected(false)
         worker = null
     }
 
-    private fun runLoop() {
+    /** Skip the remaining reconnect backoff, e.g. when the network comes back. */
+    fun reconnectNow() {
+        synchronized(retrySignal) { retrySignal.notifyAll() }
+    }
+
+    private fun isCurrent(gen: Int) = running && gen == generation
+
+    private fun runLoop(gen: Int) {
         var backoffMs = 1000L
-        while (running) {
+        while (isCurrent(gen)) {
             val host = targetHost
             if (host == null) {
-                sleep(500); continue
+                waitForRetry(500); continue
             }
+            var s: Socket? = null
             try {
                 Log.d(TAG, "Connecting to $host:$targetPort")
-                val s = Socket()
+                s = Socket()
                 s.tcpNoDelay = true
                 s.connect(InetSocketAddress(host, targetPort), 5000)
                 s.soTimeout = TIMEOUT_MS.toInt()
+                if (!isCurrent(gen)) break
                 socket = s
                 dos = DataOutputStream(s.getOutputStream())
                 val dis = DataInputStream(s.getInputStream())
@@ -112,10 +134,11 @@ object MacSession {
                 setConnected(true)
                 lastRx = System.currentTimeMillis()
                 backoffMs = 1000L
-                startHeartbeat()
+                startHeartbeat(s)
+                onConnected?.invoke()
 
                 // Blocking read loop for inbound frames (JSON only from the Mac).
-                while (running) {
+                while (isCurrent(gen)) {
                     val len = dis.readInt()
                     if (len <= 0 || len > 1_000_000) break
                     val buf = ByteArray(len)
@@ -126,29 +149,43 @@ object MacSession {
             } catch (e: Exception) {
                 Log.d(TAG, "Session dropped: ${e.message}")
             } finally {
-                setConnected(false)
-                closeSocket()
+                // Only tear down shared state if this loop is still the current
+                // one; a newer loop may already have installed its own socket.
+                if (gen == generation) {
+                    setConnected(false)
+                    closeSocket()
+                } else {
+                    try { s?.close() } catch (_: Exception) {}
+                }
             }
-            if (running) {
-                sleep(backoffMs)
+            if (isCurrent(gen)) {
+                waitForRetry(backoffMs)
                 backoffMs = (backoffMs * 2).coerceAtMost(15_000L)
             }
         }
     }
 
-    private fun startHeartbeat() {
+    /** One heartbeat thread per connection; it exits as soon as that socket is
+     *  replaced or closed (it used to survive quick reconnects and pile up). */
+    private fun startHeartbeat(s: Socket) {
         thread(name = "MacSession-hb") {
-            while (running && connected) {
+            while (socket === s && !s.isClosed) {
                 sleep(HEARTBEAT_MS)
-                if (!connected) break
+                if (socket !== s || s.isClosed) break
                 if (System.currentTimeMillis() - lastRx > TIMEOUT_MS) {
                     Log.d(TAG, "Heartbeat timeout — dropping socket")
-                    closeSocket()
+                    try { s.close() } catch (_: Exception) {}
                     break
                 }
                 sendJson(JSONObject().apply { put("type", "ping") })
             }
         }
+    }
+
+    private fun waitForRetry(ms: Long) {
+        try {
+            synchronized(retrySignal) { retrySignal.wait(ms) }
+        } catch (_: InterruptedException) {}
     }
 
     private fun handleInbound(msg: JSONObject) {
@@ -160,7 +197,7 @@ object MacSession {
             "ping" -> sendJson(JSONObject().apply { put("type", "pong") })
             "pong" -> { /* liveness refreshed via lastRx */ }
             "hello" -> Log.d(TAG, "Handshake with ${msg.optString("name", "Mac")}")
-            "find_phone" -> appContext?.sendBroadcast(android.content.Intent("clipper.ring").setPackage(appContext?.packageName))
+            "find_phone" -> appContext?.let { ctx -> Handler(Looper.getMainLooper()).post { ClipboardReceiver.ringPhone(ctx) } }
         }
     }
 
@@ -258,6 +295,7 @@ object MacSession {
         Handler(Looper.getMainLooper()).post { connectionListener?.invoke(value) }
     }
 
+    @Synchronized
     private fun closeSocket() {
         try { dos?.close() } catch (_: Exception) {}
         try { socket?.close() } catch (_: Exception) {}

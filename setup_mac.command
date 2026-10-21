@@ -61,20 +61,34 @@ if ! python3 -c "import objc, watchdog, PIL, PyInstaller" >/dev/null 2>&1; then
 fi
 
 # --- 4. Build and Install App ------------------------------------------------
-echo "→ Building standalone macOS App..."
+# Single source of truth for the version: APP_VERSION in unified_sync.py
+VERSION=$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' unified_sync.py)
+echo "→ Building standalone macOS App (v${VERSION})..."
 rm -rf __pycache__ build dist "Nothing AirShare.spec"
-pyinstaller --clean -y --noconsole --name "Nothing AirShare" unified_sync.py >/dev/null 2>&1
-plutil -insert LSUIElement -bool YES "dist/Nothing AirShare.app/Contents/Info.plist" >/dev/null 2>&1
+if ! pyinstaller --clean -y --noconsole --name "Nothing AirShare" unified_sync.py >build.log 2>&1 \
+   || [ ! -d "dist/Nothing AirShare.app" ]; then
+  echo "❌ Build failed — your installed app was left untouched."
+  echo "   Details are in: $(pwd)/build.log"
+  echo "   Press Return to close."; read -r _; exit 1
+fi
+PLIST="dist/Nothing AirShare.app/Contents/Info.plist"
+plutil -insert LSUIElement -bool YES "$PLIST" >/dev/null 2>&1 || plutil -replace LSUIElement -bool YES "$PLIST"
+plutil -replace CFBundleShortVersionString -string "$VERSION" "$PLIST" >/dev/null 2>&1
+plutil -replace CFBundleVersion -string "$VERSION" "$PLIST" >/dev/null 2>&1
+plutil -replace CFBundleIdentifier -string "com.nothing.airshare.mac" "$PLIST" >/dev/null 2>&1
 
 echo "→ Installing to /Applications..."
+# Quit the running copy first so the new version can take over port 53317.
+pkill -f "Nothing AirShare.app/Contents/MacOS/" >/dev/null 2>&1 && sleep 1
 rm -rf "/Applications/Nothing AirShare.app"
 cp -R "dist/Nothing AirShare.app" "/Applications/"
-rm -rf build dist "Nothing AirShare.spec"
+rm -rf build dist "Nothing AirShare.spec" build.log
 
 # --- 5. Launch ---------------------------------------------------------------
 echo ""
 echo "  ✅ Ready! Launching Nothing AirShare."
 echo "  Look for the  ⚫️  dot in your menu bar (top-right of the screen)."
 echo "  You can now launch 'Nothing AirShare' directly from your Applications folder!"
+echo "  Logs (for troubleshooting): ~/.nothing_sync/airshare.log"
 echo ""
 open "/Applications/Nothing AirShare.app"

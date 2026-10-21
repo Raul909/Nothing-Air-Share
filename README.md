@@ -12,7 +12,7 @@
 
 *Featuring a custom, minimalist Nothing OS-inspired dot-matrix adaptive icon designed with transparency. It dynamically inverts between light and dark themes to fit perfectly in your browser or phone launcher! Showcasing open-source collaboration and creative interface design.*
 
-[![Download Latest APK](apk/download_latest.svg?v=2.9.1)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+[![Download Latest APK](apk/download_latest.svg?v=2.10.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
 <p align="center">
   <a href="https://github.com/Raul909/Nothing-Air-Share/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/Raul909/Nothing-Air-Share?style=for-the-badge&color=e60012&label=latest"></a>
@@ -33,6 +33,7 @@ Apple keeps AirDrop and Universal Clipboard locked to Apple devices — so your 
 - 🖱️ **Phone as a trackpad + media remote** — steer your Mac's cursor and playback wirelessly
 - 🔔 **Find My Phone**, 🌙 **Focus / DND sync**, and 🔋 **live battery** right in the menu bar
 - 🔒 **Private by design** — 100% local, PIN‑protected transfers, fully open source
+- 🛡️ **Hardened in v2.10** — injection & path-traversal fixes, crash-proof background service, self-healing connections
 - ⚫️ **Premium Nothing OS aesthetic** — a dot‑matrix menu‑bar app with a custom adaptive icon
 
 > New here? Jump straight to **[Install the Android app](#-install-the-android-companion-app)** and **[Install the macOS daemon](#️-install-the-macos-sync-daemon)**.
@@ -59,7 +60,7 @@ Apple keeps AirDrop and Universal Clipboard locked to Apple devices — so your 
     │                    │                   │                      │
     │  NothingAirShare   │                   │  No app required —   │
     │  Companion App     │                   │  uses native AirDrop │
-    │  (APK v2.9.1)      │                   │  & Universal         │
+    │  (APK v2.10.0)     │                   │  & Universal         │
     │                    │                   │  Clipboard           │
     └────────────────────┘                   └──────────────────────┘
 ```
@@ -79,7 +80,7 @@ Apple keeps AirDrop and Universal Clipboard locked to Apple devices — so your 
 ### Option A — Direct Download (Recommended)
 1. Download the latest version to your phone:
 
-   [![Download Latest APK](apk/download_latest.svg?v=2.9.1)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
+   [![Download Latest APK](apk/download_latest.svg?v=2.10.0)](https://github.com/Raul909/Nothing-Air-Share/releases/latest/download/NothingAirShare.apk)
 
    **Previous Version:**
    [![v2.9.1](apk/version_v2.9.1.svg?v=2.9.1)](https://github.com/Raul909/Nothing-Air-Share/releases/download/v2.9.1/NothingAirShare.apk)
@@ -158,8 +159,8 @@ Once paired, connecting is fully automated:
 ### 📁 File Sharing
 | Direction | How |
 |---|---|
-| **Mac → Phone** | Drag any file into `~/NothingDrop` on your Mac — it's automatically pushed to the phone. Or click **Send Files** in the popover to pick a file. |
-| **Phone → Mac** | Tap **Share** on any file → choose **Nothing AirShare**, or open the app and tap **SEND FILES** |
+| **Mac → Phone** | Drag any file into `~/NothingDrop` on your Mac — it's automatically pushed to the phone. Or click **Send Files** in the popover to pick a file. Uses ADB when connected (silent), otherwise Wi-Fi (tap **Accept** on the phone). |
+| **Phone → Mac** | Tap **Share** on any file → choose **Nothing AirShare** (queued and pulled over ADB), or open the app and tap **SEND FILES** (sent straight to your Mac over Wi-Fi when connected, otherwise queued for ADB) |
 | **Phone → Mac (P2P)** | Open app → see your Mac under **Nearby Devices** in the drawer → tap **SEND** → pick file |
 | **Mac → Phone (P2P)** | Click `⚫️` → click **Send File** next to your phone under **Nearby Devices** → pick a file to send |
 | **iPhone → Phone** | AirDrop a file from iPhone to Mac — the daemon auto-forwards it to your phone |
@@ -194,7 +195,7 @@ All received files are indexed by **Spotlight** — find them instantly with `Cm
 | **REMOTE INPUT** | Opens a full-screen trackpad with **Multi-Touch Gestures**: <br>• 1-Finger Tap: Left Click <br>• 2-Finger Tap: Right Click <br>• 2-Finger Swipe Left/Right: Browser Back/Forward <br>• 3-Finger Swipe Up/Down: Mission Control / App Exposé <br>• 3-Finger Swipe Left/Right: Change Desktop Spaces |
 | **MEDIA REMOTE** | Control Mac media playback (Play/Pause, Next, Previous) wirelessly |
 | **☰ Drawer** | Slide open to see discovered nearby devices, settings, and about info |
-| **⚙ Settings Overlay** | Customize options including: <br>• **Font Size Scaling**: Toggle SMALL, MEDIUM (default), or LARGE font scaling sizes globally in real-time. <br>• **⚙ Wireless Debugging Button**: Launches Android system Wireless Debugging / developer options panel. |
+| **⚙ Settings Overlay** | Customize options including: <br>• **Font Size Scaling**: Toggle SMALL, MEDIUM (default), or LARGE font scaling sizes globally in real-time. <br>• **Manual Mac IP**: Pin your Mac's IP if your Wi-Fi blocks device discovery (port `53317`). <br>• **Security PIN**: Required for Wi-Fi file transfers — must match the Mac's PIN. <br>• **⚙ Wireless Debugging Button**: Launches Android system Wireless Debugging / developer options panel. |
 
 ### 🌙 Focus Mode Sync
 Toggle **Do Not Disturb** on your Mac → your Nothing Phone's DND / Zen Mode follows automatically.
@@ -215,7 +216,37 @@ That's it — the `⚫️` dot will quietly appear in your menu bar every time y
 
 ---
 
+## 🩺 Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Something isn't syncing | Check the log at `~/.nothing_sync/airshare.log` (timestamped, auto-rotated at 2 MB) |
+| "Already running" notification | Only one copy can run at a time. If you used the old LaunchAgent (`com.nothing.clipboard-sync.plist`), unload it: `launchctl unload ~/Library/LaunchAgents/com.nothing.clipboard-sync.plist` |
+| Phone never shows **Connected to Mac** | Your router may block Bonjour/mDNS. On the phone open **☰ → Settings → Manual Mac IP**, enter the Mac's IP (System Settings → Wi-Fi → Details) and save |
+| Wi-Fi file transfers are rejected | Both sides use the transfer PIN (default `1234`). Set it on the phone in **Settings → Security PIN** and on the Mac in `~/.nothing_sync/config.json` as `"security_pin": "<pin>"` |
+| Find Phone / clipboard push over ADB does nothing | Update the phone app to v2.10.0+ — older builds rejected commands from ADB |
+| Trackpad or media keys don't work | Grant **Accessibility** to *Nothing AirShare* in System Settings → Privacy & Security → Accessibility |
+| `setup_mac.command` says the build failed | Your previous install is untouched; open the `build.log` it points to |
+
+---
+
 ## 📋 Changelog
+
+*Full history: [CHANGELOG.md](CHANGELOG.md)*
+
+### v2.10.0 — Security, Stability & Performance Overhaul
+**Security**
+- Fixed AppleScript injection: crafted clipboard text or file names from a device on the same Wi-Fi could run commands on the Mac.
+- Incoming file names are sanitized (no more `../` escapes); logs no longer contain clipboard text, PINs or pairing codes.
+
+**Stability**
+- Android: fixed crashes on service restart, discovery failure, and files arriving after the app screen closed; transfers never hang waiting for an answer.
+- Mac: ADB timeouts everywhere, single-device pinning (no more "more than one device"), dead wireless-ADB links detected in 30s, single-instance lock, log file.
+- AirDrop forwarding, Find Phone over ADB, Mac → phone image clipboard, **Send Files** without a selected device and the **Manual Mac IP** setting all work again.
+- Wi-Fi fallback for Mac → phone file sends when ADB is down; instant reconnect when Wi-Fi returns; interrupted transfers are cleaned up.
+
+**Performance**
+- Non-blocking notifications (smooth trackpad), clipboard watcher and popover only work when something changed, cached history and icons, no 1s polling on the phone while the app is hidden.
 
 ### v2.9.1 — Remote Gestures & Media Fixes
 **Multi-Touch Gestures**
@@ -224,7 +255,7 @@ That's it — the `⚫️` dot will quietly appear in your menu bar every time y
 - Fixed macOS media keys (Play/Pause/Volume) not registering on modern macOS versions.
 - Fixed "Find Phone" alert missing in the new TCP transport.
 
-### v2.9.1 — Unified Transport & Native macOS App
+### v2.9.0 — Unified Transport & Native macOS App
 
 **Native macOS Experience**
 - Bundled the Python daemon into a native standalone `Nothing AirShare.app` using PyInstaller.

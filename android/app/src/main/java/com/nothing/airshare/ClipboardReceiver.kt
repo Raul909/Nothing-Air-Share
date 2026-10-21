@@ -8,7 +8,6 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -18,12 +17,54 @@ import android.widget.Toast
 class ClipboardReceiver : BroadcastReceiver() {
     companion object {
         private var activeRingtone: Ringtone? = null
+
+        /** Play the alarm for 15s. Called from the ADB broadcast and directly by
+         *  [MacSession] (an in-app broadcast would need the receiver's permission). */
+        fun ringPhone(context: Context) {
+            val prefs = context.getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
+            if (!prefs.getBoolean("pref_find_phone", true)) {
+                Log.d("ClipboardReceiver", "Find Phone requested but disabled in settings.")
+                return
+            }
+            try {
+                activeRingtone?.let {
+                    if (it.isPlaying) {
+                        it.stop()
+                    }
+                }
+                val notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                val newRingtone = RingtoneManager.getRingtone(context, notificationUri)
+                if (newRingtone != null) {
+                    newRingtone.audioAttributes = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    newRingtone.play()
+                    activeRingtone = newRingtone
+                    Toast.makeText(context, "Finding Nothing Phone...", Toast.LENGTH_SHORT).show()
+                    Log.d("ClipboardReceiver", "Find My Phone: Alarm playing")
+
+                    // Stop after 15 seconds
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        try {
+                            if (newRingtone.isPlaying) {
+                                newRingtone.stop()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("ClipboardReceiver", "Error stopping alarm: ${e.message}")
+                        }
+                    }, 15000)
+                }
+            } catch (e: Exception) {
+                Log.e("ClipboardReceiver", "Error triggering Find My Phone alarm: ${e.message}")
+            }
+        }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         val prefs = context.getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
         val isClipboardEnabled = prefs.getBoolean("pref_clipboard_sync", true)
-        val isFindPhoneEnabled = prefs.getBoolean("pref_find_phone", true)
 
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val action = intent.action
@@ -43,7 +84,8 @@ class ClipboardReceiver : BroadcastReceiver() {
                 } catch (e: SecurityException) {
                     Log.e("ClipboardReceiver", "SecurityException setting clipboard: ${e.message}")
                 }
-                Toast.makeText(context, "Clipboard synced from Mac: $text", Toast.LENGTH_SHORT).show()
+                val preview = if (text.length > 40) "${text.take(37)}..." else text
+                Toast.makeText(context, "Clipboard synced from Mac: $preview", Toast.LENGTH_SHORT).show()
                 setResult(0, "Text is copied into clipboard.", null)
                 Log.d("ClipboardReceiver", "Clipboard set: $text")
             } else {
@@ -66,45 +108,7 @@ class ClipboardReceiver : BroadcastReceiver() {
                 setResult(0, "", null)
             }
         } else if ("clipper.ring" == action) {
-            if (!isFindPhoneEnabled) {
-                Log.d("ClipboardReceiver", "Find Phone requested but disabled in settings.")
-                return
-            }
-            try {
-                activeRingtone?.let {
-                    if (it.isPlaying) {
-                        it.stop()
-                    }
-                }
-                val notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                val newRingtone = RingtoneManager.getRingtone(context, notificationUri)
-                if (newRingtone != null) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        newRingtone.audioAttributes = AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build()
-                    }
-                    newRingtone.play()
-                    activeRingtone = newRingtone
-                    Toast.makeText(context, "Finding Nothing Phone...", Toast.LENGTH_SHORT).show()
-                    Log.d("ClipboardReceiver", "Find My Phone: Alarm playing")
-                    
-                    // Stop after 15 seconds
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        try {
-                            if (newRingtone.isPlaying) {
-                                newRingtone.stop()
-                            }
-                        } catch (e: Exception) {
-                            Log.e("ClipboardReceiver", "Error stopping alarm: ${e.message}")
-                        }
-                    }, 15000)
-                }
-            } catch (e: Exception) {
-                Log.e("ClipboardReceiver", "Error triggering Find My Phone alarm: ${e.message}")
-            }
+            ringPhone(context)
         }
     }
 }

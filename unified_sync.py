@@ -8,6 +8,11 @@ import sqlite3
 import base64
 import socket
 import struct
+import hmac
+import shlex
+import sys
+import fcntl
+import queue
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSWorkspace,
@@ -20,7 +25,7 @@ from AppKit import (
     NSRectFill, NSBezierPath, NSAlert, NSPopUpButton,
     NSImageLeft, NSPopoverBehaviorTransient, NSMinYEdge,
     NSMutableAttributedString, NSForegroundColorAttributeName,
-    NSFontAttributeName
+    NSFontAttributeName, NSPasteboardTypePNG
 )
 from Foundation import NSObject, NSURL, NSNetService, NSNetServiceBrowser
 import objc
@@ -131,8 +136,8 @@ def _post_aux_key(key_code):
     Quartz.CGEventSetIntegerValueField(ev_up, Quartz.kCGEventSourceUserData, 0)
     Quartz.CGEventSetIntegerValueField(ev_up, Quartz.kCGKeyboardEventAutorepeat, 0)
     Quartz.CGEventSetIntegerValueField(ev_up, 109, (key_code << 16) | (0xb << 8))
-    Quartz.CGEventPost(Quartz.kCGSessionEventTap, ev_down)
-    Quartz.CGEventPost(Quartz.kCGSessionEventTap, ev_up)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_down)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_up)
 
 def simulate_key_combo(keycode, flags=None):
     if not _ax_ok(): return
@@ -189,12 +194,15 @@ for p in ["/opt/homebrew/bin", "/usr/local/bin"]:
         os.environ["PATH"] = f"{p}:{os.environ.get('PATH', '')}"
 
 # Configuration
+APP_VERSION = "2.10.0"
 DROP_ZONE_MAC = os.path.expanduser("~/NothingDrop")
 DROP_ZONE_ANDROID = "/sdcard/Download/NothingDrop"
 TEMP_DIR = os.path.expanduser("~/.nothing_sync_temp")
 CONFIG_DIR = os.path.expanduser("~/.nothing_sync")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 DB_FILE = os.path.join(CONFIG_DIR, "history.db")
+LOG_FILE = os.path.join(CONFIG_DIR, "airshare.log")
+LOG_MAX_BYTES = 2 * 1024 * 1024
 
 # ── Network constants (single source of truth) ──────────────────────────────
 # LAN duplex session port: the Mac TCP server listens here and the phone opens a
@@ -219,6 +227,17 @@ os.makedirs(DROP_ZONE_MAC, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
+def remove_quietly(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+# Clipboard images left behind by earlier versions (one PNG per copy, never deleted)
+for _name in os.listdir(TEMP_DIR):
+    if _name.startswith("clip_img_"):
+        remove_quietly(os.path.join(TEMP_DIR, _name))
+
 # Global sync state
 CURRENT_CLIPBOARD_CONTENT = ""
 sync_state_lock = threading.Lock()
@@ -235,6 +254,64 @@ peer_sessions_lock = threading.Lock()
 # Helper app configuration for Option B clipboard sync
 HELPER_PACKAGE = "com.nothing.airshare"
 HELPER_RECEIVER = "com.nothing.airshare/.ClipboardReceiver"
+AIRSHARE_RECEIVER = "com.nothing.airshare/.ClipboardReceiver"
+
+# Connection state is the union of two independent links: the ADB stream and the
+# LAN session(s). Each source flips its own flag and calls refresh_connection_state.
+adb_link_up = False
+
+# Serial of the device all device-scoped adb commands are pinned to. Without it a
+# phone listed twice (USB + Wi-Fi, or mDNS name + IP:port) makes every
+# `adb shell` fail with "more than one device/emulator".
+ADB_SERIAL = None
+
+
+def adb(*args, timeout=15, text=True, device=True):
+    """Run an adb command with a timeout so a wedged adb server can't hang a
+    worker thread forever. Never raises; a timeout returns returncode 124."""
+    cmd = ["adb"]
+    if device and ADB_SERIAL:
+        cmd += ["-s", ADB_SERIAL]
+    cmd += [str(a) for a in args]
+    empty = "" if text else b""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"[ADB] Timed out after {timeout}s: adb {' '.join(cmd[1:4])}")
+        return subprocess.CompletedProcess(cmd, 124, empty, "timeout" if text else b"timeout")
+    except OSError as e:
+        print(f"[ADB] Failed to run adb: {e}")
+        return subprocess.CompletedProcess(cmd, 127, empty, str(e) if text else str(e).encode())
+
+
+def list_adb_devices():
+    """Serials of devices in the ready ('device') state."""
+    res = adb("devices", device=False, timeout=10)
+    serials = []
+    for line in res.stdout.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "device":
+            serials.append(parts[0])
+    return serials
+
+
+def pick_adb_device(serials):
+    """Prefer the current serial, then the last address we connected to, then a
+    plain IP:port entry (stable for the session) over an mDNS service name."""
+    if ADB_SERIAL in serials:
+        return ADB_SERIAL
+    last = load_config().get("last_address")
+    if last in serials:
+        return last
+    for s in serials:
+        if ":" in s and not s.startswith("adb-"):
+            return s
+    return serials[0] if serials else None
+
+
+def refresh_connection_state():
+    if app_delegate:
+        app_delegate.set_connected(adb_link_up or has_live_session())
 
 # Config helpers
 def save_config(config):
@@ -334,6 +411,8 @@ class BonjourManager(NSObject):
             addr = f"{ip}:{port}"
             print(f"[Bonjour ADB] Discovered Wireless Debugging at {addr}. Dynamic connect...")
             threading.Thread(target=run_adb_connect_safe, args=(addr,), daemon=True).start()
+        elif self.service is not None and service.name() == self.service.name():
+            return  # our own advertisement — don't list the Mac as a nearby phone
         else:
             self.discovered_devices[service.name()] = (host, port)
             if app_delegate:
@@ -372,9 +451,9 @@ class PeerSession:
             return False
         try:
             payload = json.dumps(msg_dict).encode('utf-8')
+            frame = struct.pack('!I', len(payload)) + payload  # one write per frame
             with self.write_lock:
-                self.conn.sendall(struct.pack('!I', len(payload)))
-                self.conn.sendall(payload)
+                self.conn.sendall(frame)
             return True
         except Exception as e:
             print(f"[Session] Send to {self.name} failed: {e}")
@@ -383,15 +462,25 @@ class PeerSession:
 
     def close(self):
         self.alive = False
+        # Shut the socket down so the reader thread blocked in recv() wakes up
+        # immediately instead of waiting out its 45s timeout.
+        try:
+            self.conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         unregister_session(self)
 
 
 def register_session(session):
     with peer_sessions_lock:
+        previous = peer_sessions.get(session.name)
         peer_sessions[session.name] = session
+    # The phone reconnected (Wi-Fi roam, app restart) before its old socket timed
+    # out — retire the stale one now rather than leaking it for a minute.
+    if previous is not None and previous is not session:
+        previous.close()
     print(f"[Session] Registered live session with {session.name}")
-    if app_delegate:
-        app_delegate.set_connected(True)
+    refresh_connection_state()
 
 
 def unregister_session(session):
@@ -400,11 +489,9 @@ def unregister_session(session):
         if peer_sessions.get(session.name) is session:
             del peer_sessions[session.name]
             removed = True
-        any_left = bool(peer_sessions)
     if removed:
         print(f"[Session] Closed session with {session.name}")
-    if not any_left and app_delegate:
-        app_delegate.set_connected(False)
+        refresh_connection_state()
 
 
 def has_live_session():
@@ -441,21 +528,29 @@ def heartbeat_loop():
 
 
 def mac_tcp_server_loop():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        server.bind(('0.0.0.0', LAN_PORT))
-        server.listen(5)
-        print(f"[TCP Server] Listening for peer transfers and commands on port {LAN_PORT}")
-    except Exception as e:
-        print(f"[TCP Server] Bind failed: {e}")
-        return
+    # Keep retrying the bind: right after a relaunch the previous instance may
+    # still hold the port for a few seconds, and giving up here used to leave the
+    # app running with no LAN server at all.
+    backoff = 1
+    while True:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server.bind(('0.0.0.0', LAN_PORT))
+            server.listen(16)
+            break
+        except OSError as e:
+            server.close()
+            print(f"[TCP Server] Bind failed ({e}); retrying in {backoff}s")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30)
+    print(f"[TCP Server] Listening for peer transfers and commands on port {LAN_PORT}")
 
     while True:
         try:
             conn, addr = server.accept()
             threading.Thread(target=handle_mac_incoming_connection, args=(conn,), daemon=True).start()
-        except Exception as e:
+        except Exception:
             time.sleep(1)
 
 
@@ -508,7 +603,7 @@ def handle_mac_incoming_connection(conn):
 
             msg_type = data.get("type", "file")
             if msg_type not in ("mouse_move", "ping", "pong"):
-                print(f"[TCP Server] Received command: {data}")
+                print(f"[TCP Server] Received command: {msg_type}")
 
             if msg_type == "hello":
                 # Promote this connection to a persistent duplex session so the
@@ -580,78 +675,116 @@ def handle_mac_incoming_connection(conn):
             pass
 
 
+def safe_filename(name, default="file.bin"):
+    """Reduce a peer-supplied file name to a plain basename so it can't escape the
+    destination folder ('../../.zshrc') or hide itself with a leading dot."""
+    name = os.path.basename(str(name or "").replace("\\", "/"))
+    name = "".join(c for c in name if c >= " " and c != "\x7f").strip().lstrip(".")
+    if not name:
+        return default
+    base, ext = os.path.splitext(name)
+    return base[:200] + ext[:20]
+
+
+def unique_path(dest_dir, filename):
+    """Return dest_dir/filename, adding _1, _2... until it doesn't collide."""
+    dest_path = os.path.join(dest_dir, filename)
+    base, ext = os.path.splitext(filename)
+    counter = 1
+    while os.path.exists(dest_path):
+        dest_path = os.path.join(dest_dir, f"{base}_{counter}{ext}")
+        counter += 1
+    return dest_path
+
+
+ACCEPT_PROMPT_SCRIPT = '''on run argv
+tell application "System Events"
+    activate
+    set r to display dialog (item 1 of argv) with title "Nothing AirShare" buttons {"Decline", "Accept"} default button "Accept" giving up after 100
+end tell
+if gave up of r then return "Decline"
+return button returned of r
+end run'''
+
+
 def handle_incoming_file_data(conn, metadata):
     try:
-        sender = metadata.get("senderName", "Unknown Device")
-        filename = metadata.get("fileName", "file.bin")
-        filesize = metadata.get("fileSize", 0)
-        provided_pin = metadata.get("pin", "")
+        sender = str(metadata.get("senderName", "Unknown Device"))[:64]
+        filename = safe_filename(metadata.get("fileName"))
+        filesize = int(metadata.get("fileSize", 0) or 0)
+        provided_pin = str(metadata.get("pin", ""))
 
         config = load_config()
-        expected_pin = config.get("security_pin", "1234")
-        if provided_pin != expected_pin:
+        expected_pin = str(config.get("security_pin", "1234"))
+        if filesize < 0 or not hmac.compare_digest(provided_pin, expected_pin):
             print("[P2P Receiver] Unauthorized transfer attempt (Invalid PIN)")
-            conn.send(bytes([0x02]))
+            conn.sendall(bytes([0x02]))
             return
 
         print(f"[P2P Receiver] Incoming file request from {sender}: {filename} ({filesize} bytes)")
 
-        # 3. Prompt user via AppleScript
+        # 3. Prompt user via AppleScript (text goes in as argv, see NOTIFY_SCRIPT)
         size_mb = filesize / 1024.0 / 1024.0
-        prompt_script = f'''
-        tell application "System Events"
-            activate
-            display dialog "Incoming file share from {sender}\n\nFile: {filename}\nSize: {size_mb:.2f} MB\n\nDo you want to accept this file?" with title "Nothing AirShare" buttons {{"Decline", "Accept"}} default button "Accept"
-        end tell
-        '''
-        proc = subprocess.run(["osascript", "-e", prompt_script], capture_output=True, text=True)
-        accepted = "Accept" in proc.stdout
+        prompt = (f"Incoming file share from {sender}\n\nFile: {filename}\n"
+                  f"Size: {size_mb:.2f} MB\n\nDo you want to accept this file?")
+        try:
+            proc = subprocess.run(["osascript", "-e", ACCEPT_PROMPT_SCRIPT, prompt],
+                                  capture_output=True, text=True, timeout=120)
+            accepted = proc.stdout.strip() == "Accept"
+        except subprocess.TimeoutExpired:
+            accepted = False
 
         # 4. Respond with approval code
         if accepted:
-            conn.send(bytes([0x01]))  # Accept
+            conn.sendall(bytes([0x01]))  # Accept
             print("[P2P Receiver] User accepted the transfer. Receiving stream...")
             send_mac_notification("Nothing AirShare", f"Receiving '{filename}' from {sender}...")
 
-            # 5. Receive stream
-            dest_dir = DROP_ZONE_MAC
-            dest_path = os.path.join(dest_dir, filename)
-
-            # Prevent file collisions
-            base, ext = os.path.splitext(filename)
-            counter = 1
-            while os.path.exists(dest_path):
-                dest_path = os.path.join(dest_dir, f"{base}_{counter}{ext}")
-                counter += 1
-
-            with open(dest_path, 'wb') as f:
-                received = 0
-                while received < filesize:
-                    to_read = min(262144, filesize - received)  # 256KB buffer (L5)
-                    chunk = conn.recv(to_read)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    received += len(chunk)
+            # 5. Receive into a hidden .part file and only reveal it once complete,
+            # so an interrupted transfer never leaves a truncated file behind.
+            dest_path = unique_path(DROP_ZONE_MAC, filename)
+            part_path = os.path.join(DROP_ZONE_MAC, f".{os.path.basename(dest_path)}.part")
+            received = 0
+            try:
+                with open(part_path, 'wb') as f:
+                    while received < filesize:
+                        to_read = min(262144, filesize - received)  # 256KB buffer (L5)
+                        chunk = conn.recv(to_read)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        received += len(chunk)
+                if received != filesize:
+                    raise ConnectionError(f"stream ended after {received}/{filesize} bytes")
+                ignore_drop_path(dest_path)
+                os.replace(part_path, dest_path)
+            except Exception:
+                try:
+                    os.remove(part_path)
+                except OSError:
+                    pass
+                raise
 
             print(f"[P2P Receiver] Successfully received: {dest_path}")
-            
+
             # Import to macOS Spotlight index and notify
-            subprocess.run(["mdimport", dest_path], capture_output=True)
+            subprocess.run(["mdimport", dest_path], capture_output=True, timeout=30)
             send_mac_notification("Nothing AirShare Success", f"Received '{os.path.basename(dest_path)}' from {sender}")
         else:
-            conn.send(bytes([0x02]))  # Decline
+            conn.sendall(bytes([0x02]))  # Decline
             print("[P2P Receiver] User declined the transfer.")
     except Exception as e:
         print(f"[P2P Receiver Error] Connection failed: {e}")
+        send_mac_notification("Nothing AirShare Error", "File transfer from phone failed.")
 
 
 def mac_send_file_to_peer(file_path, device_name, host, port):
+    sock = None
     try:
         send_mac_notification("Nothing AirShare", f"Connecting to {device_name}...")
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(30.0)
-        sock.connect((host, port))
+        sock = socket.create_connection((host, port), timeout=10.0)
+        # The phone shows an Accept/Decline dialog; give the user time to answer.
+        sock.settimeout(130.0)
 
         config = load_config()
         # 1. Send metadata JSON
@@ -675,14 +808,11 @@ def mac_send_file_to_peer(file_path, device_name, host, port):
         res = sock.recv(1)
         if res and res[0] == 0x01:
             send_mac_notification("Nothing AirShare", f"Sending '{filename}' to {device_name}...")
+            sock.settimeout(30.0)
 
-            # 3. Stream data
+            # 3. Stream data (zero-copy from the page cache where supported)
             with open(file_path, 'rb') as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    sock.sendall(chunk)
+                sock.sendfile(f)
 
             print(f"[P2P Sender] Sent {filename} to {device_name}")
             send_mac_notification("Nothing AirShare Success", f"Sent '{filename}' to {device_name} successfully!")
@@ -693,7 +823,8 @@ def mac_send_file_to_peer(file_path, device_name, host, port):
         print(f"[P2P Sender Error] Transfer failed: {e}")
         send_mac_notification("Nothing AirShare Error", f"Failed to send: {e}")
     finally:
-        sock.close()
+        if sock:
+            sock.close()
 
 # Watcher for iOS AirDropped files in ~/Downloads
 class DownloadsAirDropHandler(FileSystemEventHandler):
@@ -712,44 +843,25 @@ class DownloadsAirDropHandler(FileSystemEventHandler):
         
         if not self.is_airdrop_file(filepath):
             return
-            
+        if not (adb_link_up or find_phone_peer()):
+            print(f"[AirDrop Forwarder] Phone not reachable; leaving {filename} on the Mac")
+            return
+
         print(f"[AirDrop Forwarder] Detected iOS AirDropped file: {filename}")
         send_mac_notification("AirDrop Forwarder", f"Forwarding iOS AirDrop to Nothing Phone: {filename}")
         
-        # Wait for file write to complete
-        try:
-            if not os.path.exists(filepath):
-                return
-            size1 = os.path.getsize(filepath)
-            time.sleep(0.5)
-            if not os.path.exists(filepath):
-                return
-            size2 = os.path.getsize(filepath)
-            while size1 != size2:
-                size1 = size2
-                time.sleep(0.5)
-                if not os.path.exists(filepath):
-                    return
-                size2 = os.path.getsize(filepath)
-                
-            # Push to phone over ADB
-            remote_path = f"{DROP_ZONE_ANDROID}/{filename}"
-            subprocess.run(["adb", "shell", f"mkdir -p {DROP_ZONE_ANDROID}"], check=True, capture_output=True)
-            res = subprocess.run(["adb", "push", filepath, remote_path], check=True, capture_output=True)
-            if res.returncode == 0:
-                print(f"[AirDrop Forwarder] Successfully forwarded to Phone: {filename}")
-                send_android_notification("Nothing Drop", f"Received from iOS: {filename}")
-        except Exception as e:
-            print(f"[AirDrop Forwarder Error] Failed to forward {filename}: {e}")
+        if wait_until_file_settles(filepath):
+            send_file_to_phone(filepath, notify_title="Received from iOS")
 
     def is_airdrop_file(self, filepath):
         try:
             if not os.path.exists(filepath):
                 return False
-            # Run xattr -p com.apple.quarantine to check if agent is AirDrop
+            # The quarantine agent for AirDropped files is "sharingd" on current
+            # macOS (older releases wrote "AirDrop").
             res = subprocess.run(["xattr", "-p", "com.apple.quarantine", filepath], capture_output=True, text=True, timeout=2)
-            if res.returncode == 0 and "AirDrop" in res.stdout:
-                return True
+            agent = res.stdout.split(";")[2] if res.returncode == 0 and res.stdout.count(";") >= 2 else ""
+            return agent in ("sharingd", "AirDrop")
         except Exception:
             pass
         return False
@@ -757,21 +869,31 @@ class DownloadsAirDropHandler(FileSystemEventHandler):
 
 # SQLite Clipboard History helper
 class ClipboardHistoryDB:
+    """One shared connection (was: a new one per call) plus an in-memory copy of
+    the newest rows, so the popover's 2s refresh never touches the disk."""
+    CACHE_SIZE = 10
+    KEEP = 50
+
     def __init__(self):
         self.db_path = DB_FILE
+        self.lock = threading.Lock()
+        self.conn = None
+        self.recent = []
         self.init_db()
 
     def init_db(self):
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS history (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        content TEXT NOT NULL,
-                        timestamp REAL NOT NULL
-                    )
-                """)
-                conn.commit()
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    timestamp REAL NOT NULL
+                )
+            """)
+            self.conn.commit()
+            rows = self.conn.execute("SELECT content FROM history ORDER BY id DESC LIMIT ?", (self.CACHE_SIZE,))
+            self.recent = [row[0] for row in rows]
         except Exception as e:
             print(f"[DB Error] Init failed: {e}")
 
@@ -780,65 +902,95 @@ class ClipboardHistoryDB:
             return
         if len(content) > 10000:  # Skip storing extremely long text/data
             return
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT content FROM history ORDER BY id DESC LIMIT 1")
-                row = cursor.fetchone()
-                if row and row[0] == content:
-                    return
-                cursor.execute("INSERT INTO history (content, timestamp) VALUES (?, ?)", (content, time.time()))
-                # Keep last 50
-                cursor.execute("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 50)")
-                conn.commit()
-        except Exception as e:
-            print(f"[DB Error] Insert failed: {e}")
+        with self.lock:
+            if self.recent and self.recent[0] == content:
+                return
+            self.recent = [content] + self.recent[:self.CACHE_SIZE - 1]
+            try:
+                with self.conn:  # one transaction
+                    self.conn.execute("INSERT INTO history (content, timestamp) VALUES (?, ?)", (content, time.time()))
+                    self.conn.execute("DELETE FROM history WHERE id NOT IN "
+                                      "(SELECT id FROM history ORDER BY id DESC LIMIT ?)", (self.KEEP,))
+            except Exception as e:
+                print(f"[DB Error] Insert failed: {e}")
 
     def get_history(self):
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT content FROM history ORDER BY id DESC LIMIT 10")
-                return [row[0] for row in cursor.fetchall()]
-        except Exception as e:
-            print(f"[DB Error] Fetch failed: {e}")
-            return []
+        with self.lock:
+            return list(self.recent)
 
 # Notification Helpers
-def send_mac_notification(title, message):
+# Untrusted text (clipboard contents, peer-supplied file names) is passed to
+# osascript as argv, never spliced into the script source — quote-escaping alone
+# can be bypassed with a backslash and turned into `do shell script`.
+NOTIFY_SCRIPT = 'on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run'
+
+# Launching osascript takes 100-300ms. Notifications are queued to one worker
+# instead of blocking the caller — which was often the LAN session reader, so
+# every clipboard notification also stalled trackpad input behind it.
+_notify_queue = queue.Queue(maxsize=32)
+
+def _post_notification(title, message):
     try:
-        escaped_title = title.replace('"', '\\"')
-        escaped_msg = message.replace('"', '\\"')
-        script = f'display notification "{escaped_msg}" with title "{escaped_title}"'
-        subprocess.run(["osascript", "-e", script], capture_output=True)
+        subprocess.run(["osascript", "-e", NOTIFY_SCRIPT, title, message],
+                       capture_output=True, timeout=10)
     except Exception as e:
         print(f"[Notification] Failed to send macOS notification: {e}")
 
+def _notification_worker():
+    while True:
+        _post_notification(*_notify_queue.get())
+
+threading.Thread(target=_notification_worker, daemon=True, name="notifications").start()
+
+def send_mac_notification(title, message, wait=False):
+    if wait:
+        _post_notification(str(title), str(message))
+        return
+    try:
+        _notify_queue.put_nowait((str(title), str(message)))
+    except queue.Full:
+        pass  # a burst is already queued; dropping one beats blocking the caller
+
 def send_android_notification(title, message):
     try:
-        escaped_title = title.replace("'", "'\\''")
-        escaped_msg = message.replace("'", "'\\''")
-        subprocess.run([
-            "adb", "shell",
-            f"cmd notification post -S bigtext -t '{escaped_title}' 'nothing_sync' '{escaped_msg}'"
-        ], capture_output=True)
+        adb("shell", f"cmd notification post -S bigtext -t {shlex.quote(title)} "
+                     f"nothing_sync {shlex.quote(message)}", timeout=10)
     except Exception as e:
         print(f"[Notification] Failed to send Android notification: {e}")
 
+# Files we wrote into a watched folder ourselves (received from the phone). The
+# drop-folder watcher skips these so they don't bounce straight back to the phone.
+_ignored_drop_paths = {}
+_ignored_drop_lock = threading.Lock()
+
+def ignore_drop_path(path, ttl=60):
+    now = time.time()
+    with _ignored_drop_lock:
+        for p, expiry in list(_ignored_drop_paths.items()):
+            if expiry < now:
+                del _ignored_drop_paths[p]
+        _ignored_drop_paths[os.path.realpath(path)] = now + ttl
+
+def is_ignored_drop_path(path):
+    with _ignored_drop_lock:
+        expiry = _ignored_drop_paths.get(os.path.realpath(path))
+    return expiry is not None and expiry > time.time()
+
 # Smart File Routing and Spotlight Import
-def pull_file_from_android(filename):
-    remote_path = f"/sdcard/Android/data/com.nothing.airshare/files/ToMac/{filename}"
+def pull_file_from_android(remote_name):
+    remote_path = f"/sdcard/Android/data/com.nothing.airshare/files/ToMac/{remote_name}"
+    filename = safe_filename(remote_name)
     temp_local_path = os.path.join(TEMP_DIR, filename)
-    
+
     try:
         # Pull file to temp folder first to avoid half-written files
-        res = subprocess.run(["adb", "pull", remote_path, temp_local_path], capture_output=True, timeout=60)
+        res = adb("pull", remote_path, temp_local_path, timeout=600)
         if res.returncode != 0:
-            print(f"[Drop] Failed to pull {filename}: {res.stderr.decode()}")
+            print(f"[Drop] Failed to pull {filename}: {res.stderr.strip()}")
             return
-            
-        # Delete from Android
-        subprocess.run(["adb", "shell", f"rm \"{remote_path}\""], capture_output=True)
+
+        # Delete from Android (quoted: the name was chosen on the phone)
+        adb("shell", f"rm -f {shlex.quote(remote_path)}")
         
         # Smart routing based on file extension
         ext = os.path.splitext(filename)[1].lower()
@@ -855,21 +1007,15 @@ def pull_file_from_android(filename):
             dest_dir = downloads_dir
             
         os.makedirs(dest_dir, exist_ok=True)
-        final_path = os.path.join(dest_dir, filename)
-        
         # Prevent file overwrite by appending suffix
-        base, extension = os.path.splitext(filename)
-        counter = 1
-        while os.path.exists(final_path):
-            final_path = os.path.join(dest_dir, f"{base}_{counter}{extension}")
-            counter += 1
-            
+        final_path = unique_path(dest_dir, filename)
+        ignore_drop_path(final_path)
         shutil.move(temp_local_path, final_path)
         print(f"[Drop] Pulled and routed {filename} to {final_path}")
         
         # Import to macOS Spotlight index
-        subprocess.run(["mdimport", final_path], capture_output=True)
-        
+        subprocess.run(["mdimport", final_path], capture_output=True, timeout=30)
+
         # Track last pulled file for AirDrop
         global LAST_PULLED_FILE
         LAST_PULLED_FILE = final_path
@@ -887,36 +1033,79 @@ def pull_file_from_android(filename):
             except:
                 pass
 
+def wait_until_file_settles(path, interval=0.5, timeout=900):
+    """Block until a file stops growing (still being copied or AirDropped).
+    Returns False if it disappears or never settles."""
+    deadline = time.time() + timeout
+    try:
+        last = os.path.getsize(path)
+        while time.time() < deadline:
+            time.sleep(interval)
+            size = os.path.getsize(path)
+            if size == last:
+                return True
+            last = size
+    except OSError:
+        return False
+    return False
+
+
+def push_file_over_adb(local_path):
+    filename = os.path.basename(local_path)
+    adb("shell", f"mkdir -p {DROP_ZONE_ANDROID}")
+    res = adb("push", local_path, f"{DROP_ZONE_ANDROID}/{filename}", timeout=900)
+    if res.returncode != 0:
+        print(f"[Sync] ADB push of {filename} failed: {res.stderr.strip()}")
+        return False
+    return True
+
+
+def find_phone_peer():
+    """A phone advertising _nothing-share._tcp over Bonjour, for LAN transfers.
+    Other Macs running AirShare advertise the same type as "Mac Nothing Share"."""
+    if not bonjour_manager:
+        return None
+    for name, (host, port) in dict(bonjour_manager.discovered_devices).items():
+        if "mac" not in name.lower():
+            return name, host, port
+    return None
+
+
+def send_file_to_phone(local_path, notify_title="Received", confirm_on_mac=False):
+    """Deliver a Mac file to the phone over whichever link is up: a silent ADB
+    push into Download/NothingDrop, or a LAN transfer the phone has to accept.
+    Previously only ADB was tried, so LAN-only setups couldn't send at all."""
+    filename = os.path.basename(local_path)
+    if adb_link_up and push_file_over_adb(local_path):
+        print(f"[Sync] Pushed to Phone over ADB: {filename}")
+        send_android_notification("Nothing Drop", f"{notify_title}: {filename}")
+        if confirm_on_mac:
+            send_mac_notification("Nothing AirShare", f"Successfully sent {filename} to phone.")
+        return True
+    peer = find_phone_peer()
+    if peer:
+        name, host, port = peer
+        mac_send_file_to_peer(local_path, name, host, port)
+        return True
+    print(f"[Sync] No phone link available for {filename}")
+    send_mac_notification("Nothing AirShare", f"Couldn't send {filename}: phone not connected.")
+    return False
+
+
 # File Drop Handler (Mac -> Android)
 class MacDropHandler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory:
             filename = os.path.basename(event.src_path)
-            if filename.startswith('.'):
+            if filename.startswith('.') or is_ignored_drop_path(event.src_path):
                 return
             print(f"[Drop] New local file detected: {filename}")
-            threading.Thread(target=self.push_to_android, args=(event.src_path,)).start()
-            
+            threading.Thread(target=self.push_to_android, args=(event.src_path,), daemon=True).start()
+
     def push_to_android(self, local_path):
-        filename = os.path.basename(local_path)
-        remote_path = f"{DROP_ZONE_ANDROID}/{filename}"
-        try:
-            # Let file writing finish on Mac
-            size1 = os.path.getsize(local_path)
-            time.sleep(0.5)
-            size2 = os.path.getsize(local_path)
-            while size1 != size2:
-                size1 = size2
-                time.sleep(0.5)
-                size2 = os.path.getsize(local_path)
-                
-            subprocess.run(["adb", "shell", f"mkdir -p {DROP_ZONE_ANDROID}"], check=True, capture_output=True)
-            res = subprocess.run(["adb", "push", local_path, remote_path], check=True, capture_output=True)
-            if res.returncode == 0:
-                print(f"[Sync] Pushed to Phone: {filename}")
-                send_android_notification("Nothing Drop", f"Received: {filename}")
-        except Exception as e:
-            print(f"[Error] Failed to push {filename}: {e}")
+        # Let file writing finish on Mac
+        if wait_until_file_settles(local_path):
+            send_file_to_phone(local_path)
 
 # Mac Pasteboard Interfacing
 class ClipboardHelper(NSObject):
@@ -930,30 +1119,38 @@ class ClipboardHelper(NSObject):
             return
         
         LAST_CHANGE_COUNT = change_count
-        
+        context['result'] = (None, change_count)
+
         # 1. Check for Files
         if pb.availableTypeFromArray_([NSFilenamesPboardType]):
             files = pb.propertyListForType_(NSFilenamesPboardType)
             if files:
                 context['result'] = ({"type": "file", "data": files[0]}, change_count)
                 return
-            
-        # 2. Check for Images
-        if pb.availableTypeFromArray_([NSTIFFPboardType]):
-            image_data = pb.dataForType_(NSPNGFileType)
-            if not image_data:
-                image = NSImage.alloc().initWithPasteboard_(pb)
-                if image:
-                    tiff_data = image.TIFFRepresentation()
-                    bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
-                    image_data = bitmap.representationUsingType_properties_(NSPNGFileType, None)
-            
+
+        # 2. Check for Images. Only the ADB path can deliver them, so skip the
+        # (main-thread) PNG encode entirely when it's down and fall back to text.
+        if adb_link_up and pb.availableTypeFromArray_([NSTIFFPboardType, NSPasteboardTypePNG]):
+            try:
+                # NSPasteboardTypePNG is the pasteboard type; NSPNGFileType is a
+                # bitmap format enum and made dataForType_ raise on every copy.
+                image_data = pb.dataForType_(NSPasteboardTypePNG)
+                if not image_data:
+                    image = NSImage.alloc().initWithPasteboard_(pb)
+                    if image:
+                        tiff_data = image.TIFFRepresentation()
+                        bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
+                        image_data = bitmap.representationUsingType_properties_(NSPNGFileType, None)
+            except Exception as e:
+                print(f"[Clipboard] Could not read image: {e}")
+                image_data = None
+
             if image_data:
-                temp_path = os.path.join(TEMP_DIR, f"clip_img_{int(time.time())}.png")
+                temp_path = os.path.join(TEMP_DIR, f"clip_img_{change_count}.png")
                 image_data.writeToFile_atomically_(temp_path, True)
                 context['result'] = ({"type": "image", "data": temp_path}, change_count)
                 return
-            
+
         # 3. Check for Text
         content = pb.stringForType_(NSStringPboardType)
         if content:
@@ -999,18 +1196,21 @@ def apply_incoming_clip(data):
     if not text:
         return
     with sync_state_lock:
-        if text != CURRENT_CLIPBOARD_CONTENT:
-            print(f"[Phone] Clipboard changed: {text[:20]}...")
-            CURRENT_CLIPBOARD_CONTENT = text
-            if db:
-                db.add_item(text)
-            set_mac_clipboard("text", text)
-            send_mac_notification("Nothing Clipboard", f"Copied: {text[:30]}")
+        if text == CURRENT_CLIPBOARD_CONTENT:
+            return
+        CURRENT_CLIPBOARD_CONTENT = text
+        set_mac_clipboard("text", text)
+    # Disk and notification work happens outside the lock so the clipboard
+    # watcher and the other transport aren't held up behind it.
+    print(f"[Phone] Clipboard changed ({len(text)} chars)")
+    if db:
+        db.add_item(text)
+    send_mac_notification("Nothing Clipboard", f"Copied: {text[:30]}")
 
 def detect_helper_package():
     global HELPER_PACKAGE, HELPER_RECEIVER
     try:
-        res = subprocess.run(["adb", "shell", "pm list packages"], capture_output=True, text=True, timeout=5)
+        res = adb("shell", "pm list packages", timeout=10)
         if res.returncode == 0:
             if "com.nothing.airshare" in res.stdout:
                 HELPER_PACKAGE = "com.nothing.airshare"
@@ -1031,26 +1231,22 @@ def detect_helper_package():
 def push_to_android_clipboard(item):
     try:
         if item["type"] == "text":
-            escaped_text = item["data"].replace("'", "'\\''")
+            quoted_text = shlex.quote(item["data"])
             
             # 1. Update system clipboard directly using privileged adb shell cmd clipboard (always works)
-            subprocess.run([
-                "adb", "shell",
-                f"cmd clipboard set-text '{escaped_text}'"
-            ], capture_output=True)
+            adb("shell", f"cmd clipboard set-text {quoted_text}")
             
             # 2. Also send broadcast to helper app so it can show Toast and update UI
-            res = subprocess.run([
-                "adb", "shell",
-                f"am broadcast -n '{HELPER_RECEIVER}' -a clipper.set -f 32 -e text '{escaped_text}'"
-            ], capture_output=True, text=True)
+            res = adb("shell", f"am broadcast -n {shlex.quote(HELPER_RECEIVER)} -a clipper.set -f 32 -e text {quoted_text}")
             if res.returncode == 0:
-                print(f"[Sync] Text pushed to Phone: {item['data'][:30]}...")
+                print(f"[Sync] Text pushed to Phone ({len(item['data'])} chars)")
             else:
                 print(f"[Sync Warning] Failed to push clipboard: {res.stderr.strip() or res.stdout.strip()}")
         elif item["type"] == "image":
             remote_path = f"{DROP_ZONE_ANDROID}/clipboard_image.png"
-            subprocess.run(["adb", "push", item["data"], remote_path], check=True, capture_output=True)
+            if adb("push", item["data"], remote_path, timeout=120).returncode != 0:
+                print("[Sync Warning] Failed to push clipboard image over ADB")
+                return
             print(f"[Sync] Image pushed to Phone: {os.path.basename(item['data'])}")
             send_android_notification("Nothing Sync", "Clipboard image received")
     except Exception as e:
@@ -1061,17 +1257,21 @@ def sync_clipboard_to_phone(item):
     (instant, no ADB); falls back to the ADB path when no session is active."""
     if item["type"] == "text":
         if push_to_phones({"type": "clip", "format": "text", "data": item["data"]}):
-            print(f"[Sync] Text pushed to phone over session: {item['data'][:30]}...")
+            print(f"[Sync] Text pushed to phone over session ({len(item['data'])} chars)")
             return
     # No live session (or image payload) — fall back to ADB.
-    push_to_android_clipboard(item)
+    try:
+        push_to_android_clipboard(item)
+    finally:
+        if item["type"] == "image":
+            remove_quietly(item["data"])  # temp PNG; one per image copy otherwise piles up
 
 # Native macOS Focus Check
 def get_macos_focus_state():
     try:
         res = subprocess.run(
             ["defaults", "read", "com.apple.controlcenter", "NSStatusItem Visible FocusModes"],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=5
         )
         return res.stdout.strip() == "1"
     except:
@@ -1079,7 +1279,7 @@ def get_macos_focus_state():
 
 def run_adb_connect(address):
     print(f"[ADB] Attempting connection to: {address}")
-    res = subprocess.run(["adb", "connect", address], capture_output=True, text=True)
+    res = adb("connect", address, device=False, timeout=20)
     out = res.stdout.strip()
     print(f"[ADB] Result: {out}")
     if "connected to" in out or "already connected to" in out:
@@ -1087,7 +1287,7 @@ def run_adb_connect(address):
         config["last_address"] = address
         save_config(config)
         # Setup reverse port forward for real-time cursor/media commands
-        subprocess.run(["adb", "reverse", f"tcp:{ADB_REVERSE_PORT}", f"tcp:{LAN_PORT}"], capture_output=True)
+        adb("-s", address, "reverse", f"tcp:{ADB_REVERSE_PORT}", f"tcp:{LAN_PORT}", device=False)
         print(f"[ADB] Setup reverse port forward tcp:{ADB_REVERSE_PORT} -> tcp:{LAN_PORT}")
 
 def run_adb_connect_safe(address):
@@ -1106,7 +1306,7 @@ def run_adb_connect_safe(address):
             adb_connecting = False
 
 def run_adb_pair(address, code):
-    print(f"[ADB] Attempting to pair with: {address} using code {code}")
+    print(f"[ADB] Attempting to pair with: {address}")
     proc = subprocess.Popen(
         ["adb", "pair", address],
         stdin=subprocess.PIPE,
@@ -1142,7 +1342,7 @@ def status_polling_loop():
                     if push_to_phones({"type": "dnd", "on": dnd_state}):
                         print(f"[Focus] Pushed Focus Mode '{state_str}' over session")
                     else:
-                        subprocess.run(["adb", "shell", f"cmd notification dnd {state_str}"], capture_output=True)
+                        adb("shell", f"cmd notification dnd {state_str}")
                         print(f"[Focus] Synced Focus Mode '{state_str}' to Android (ADB)")
             except Exception as e:
                 print(f"[Focus] Error syncing DND to Android: {e}")
@@ -1150,48 +1350,68 @@ def status_polling_loop():
         time.sleep(10)
 
 def mac_clipboard_watcher():
-    # Watch Mac clipboard for copy events
+    # Watch Mac clipboard for copy events. changeCount is read here on the worker
+    # thread; we only hop to the main thread to read contents when it changes
+    # (was: a blocking main-thread round trip 5x a second, forever).
     global CURRENT_CLIPBOARD_CONTENT
     print("[Watcher] Started macOS Clipboard monitor")
+    pb = NSPasteboard.generalPasteboard()
     while True:
         try:
-            item, count = get_mac_clipboard()
-            if item:
-                if item["type"] == "text":
-                    with sync_state_lock:
-                        if item["data"] != CURRENT_CLIPBOARD_CONTENT:
-                            CURRENT_CLIPBOARD_CONTENT = item["data"]
-                            db.add_item(CURRENT_CLIPBOARD_CONTENT)
-                            threading.Thread(target=sync_clipboard_to_phone, args=(item,)).start()
-                else:
-                    threading.Thread(target=sync_clipboard_to_phone, args=(item,)).start()
+            with objc.autorelease_pool():
+                if pb.changeCount() != LAST_CHANGE_COUNT:
+                    item, count = get_mac_clipboard()
+                    if item and item["type"] == "text":
+                        with sync_state_lock:
+                            is_new = item["data"] != CURRENT_CLIPBOARD_CONTENT
+                            if is_new:
+                                CURRENT_CLIPBOARD_CONTENT = item["data"]
+                        if is_new:
+                            db.add_item(item["data"])
+                            threading.Thread(target=sync_clipboard_to_phone, args=(item,), daemon=True).start()
+                    elif item and item["type"] == "image":
+                        threading.Thread(target=sync_clipboard_to_phone, args=(item,), daemon=True).start()
         except Exception as e:
-            pass
+            print(f"[Watcher] Error: {e}")
+            time.sleep(1)
         time.sleep(0.2)
 
+# The ADB shell script prints TICK every ~5s; if nothing arrives for this long the
+# wireless-ADB link is dead even though `adb shell` hasn't noticed yet.
+ADB_STREAM_STALL_TIMEOUT = 30.0
+
 def android_event_monitor():
-    global CURRENT_CLIPBOARD_CONTENT, app_delegate
+    global ADB_SERIAL, adb_link_up
     
     # Persistent shell script to monitor clipboard, focus, and files on Android
     # Optimized ADB shell script with differentiated polling intervals (L1, L2):
     # - Clipboard: every 3rd iteration (600ms) — low latency for user-facing sync
     # - Files/DND: every 25th iteration (~5s) — less frequent, reduces ADB overhead
+    # Clipboard and DND are seeded silently at start so a reconnect doesn't
+    # overwrite the Mac clipboard with a stale phone clip or re-announce DND.
+    # Files are read one per line (names may contain spaces); the phone writes
+    # dot-prefixed .part files first, which `ls` hides until they're complete.
     shell_script = """
-last_clip=""
+read_clip() {
+  data_only=$(cmd clipboard get-text 2>/dev/null | sed -e 's/\r//g')
+  if [ -z "$data_only" ]; then
+    curr_clip_raw=$(am broadcast -n "TEMPLATE_HELPER_RECEIVER" -a clipper.get -f 32 2>/dev/null | grep "data=")
+    temp="${curr_clip_raw#*data=\\"}"
+    data_only="${temp%%\\", extras:*}"
+    data_only="${data_only%\\"}"
+  fi
+}
+to_mac=/sdcard/Android/data/com.nothing.airshare/files/ToMac
+mkdir -p "$to_mac"
+read_clip
+last_clip="$data_only"
+last_zen=$(settings get global zen_mode 2>/dev/null)
 last_files=""
-last_zen=""
-mkdir -p /sdcard/Android/data/com.nothing.airshare/files/ToMac
 count=0
 while true; do
   count=$((count + 1))
   if [ $((count % 3)) -eq 0 ]; then
-    data_only=$(cmd clipboard get-text 2>/dev/null | sed -e 's/\r//g')
-    if [ -z "$data_only" ]; then
-      curr_clip_raw=$(am broadcast -n "TEMPLATE_HELPER_RECEIVER" -a clipper.get -f 32 2>/dev/null | grep "data=")
-      temp="${curr_clip_raw#*data=\\"}"
-      data_only="${temp%%\\", extras:*}"
-      data_only="${data_only%\\"}"
-    fi
+    read_clip
     if [ -n "$data_only" ] && [ "$data_only" != "$last_clip" ]; then
       encoded=$(echo -n "$data_only" | base64 | tr -d "\\r\\n")
       echo "CLIPBOARD:$encoded"
@@ -1199,15 +1419,17 @@ while true; do
     fi
   fi
   if [ $((count % 25)) -eq 0 ]; then
+    echo "TICK"
     curr_zen=$(settings get global zen_mode 2>/dev/null)
     if [ "$curr_zen" != "$last_zen" ]; then
       echo "FOCUS:$curr_zen"
       last_zen="$curr_zen"
     fi
-    curr_files=$(ls /sdcard/Android/data/com.nothing.airshare/files/ToMac 2>/dev/null)
+    curr_files=$(ls -1 "$to_mac" 2>/dev/null)
     if [ "$curr_files" != "$last_files" ]; then
-      for file in $curr_files; do
-        if ! echo "$last_files" | grep -q "^$file$"; then
+      printf '%s\\n' "$curr_files" | while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        if ! printf '%s\\n' "$last_files" | grep -qxF -- "$file"; then
           echo "FILE:$file"
         fi
       done
@@ -1223,10 +1445,11 @@ done
     while True:
         try:
             # Check if any ADB devices are connected
-            device_check = subprocess.run(["adb", "devices"], capture_output=True, text=True)
-            lines = device_check.stdout.strip().split('\n')
+            serial = pick_adb_device(list_adb_devices())
 
-            if len(lines) < 2 or not lines[1].strip() or "device" not in lines[1]:
+            if not serial:
+                adb_link_up = False
+                refresh_connection_state()
                 # A live LAN session already carries clipboard/DND/file over TCP —
                 # don't churn ADB reconnects (this was the source of the log spam).
                 if has_live_session():
@@ -1246,22 +1469,22 @@ done
                     time.sleep(backoff)
                     continue
 
-                if app_delegate and not has_live_session():
-                    app_delegate.set_connected(False)
                 time.sleep(15)
                 continue
 
+            if serial != ADB_SERIAL:
+                print(f"[ADB] Using device {serial}")
+            ADB_SERIAL = serial
             reconnect_attempts = 0
+            # Setup reverse port forward for real-time cursor/media commands
+            adb("reverse", f"tcp:{ADB_REVERSE_PORT}", f"tcp:{LAN_PORT}")
+            print(f"[ADB] Setup reverse port forward tcp:{ADB_REVERSE_PORT} -> tcp:{LAN_PORT}")
             if app_delegate:
-                try:
-                    # Setup reverse port forward for real-time cursor/media commands
-                    subprocess.run(["adb", "reverse", f"tcp:{ADB_REVERSE_PORT}", f"tcp:{LAN_PORT}"], capture_output=True)
-                    print(f"[ADB] Setup reverse port forward tcp:{ADB_REVERSE_PORT} -> tcp:{LAN_PORT}")
-                    model_res = subprocess.run(["adb", "shell", "getprop ro.product.model"], capture_output=True, text=True, timeout=3)
-                    app_delegate.device_model = model_res.stdout.strip() if (model_res.returncode == 0 and model_res.stdout.strip()) else "Nothing Phone"
-                except:
-                    app_delegate.device_model = "Nothing Phone"
-                app_delegate.set_connected(True)
+                model_res = adb("shell", "getprop ro.product.model", timeout=5)
+                model = model_res.stdout.strip() if model_res.returncode == 0 else ""
+                app_delegate.device_model = model or "Nothing Phone"
+            adb_link_up = True
+            refresh_connection_state()
                 
             # Dynamically detect installed helper package
             detect_helper_package()
@@ -1270,17 +1493,30 @@ done
             runnable_script = shell_script.replace("TEMPLATE_HELPER_RECEIVER", HELPER_RECEIVER)
             encoded_script = base64.b64encode(runnable_script.encode('utf-8')).decode('utf-8')
             proc = subprocess.Popen(
-                ["adb", "shell", f"echo {encoded_script} | base64 -d | sh"],
+                ["adb", "-s", serial, "shell", f"echo {encoded_script} | base64 -d | sh"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
                 bufsize=1
             )
+
+            last_seen = [time.monotonic()]
+
+            def stall_watchdog():
+                while proc.poll() is None:
+                    time.sleep(5)
+                    if time.monotonic() - last_seen[0] > ADB_STREAM_STALL_TIMEOUT:
+                        print("[ADB Stream] No heartbeat from phone; restarting stream")
+                        proc.kill()
+                        return
+
+            threading.Thread(target=stall_watchdog, daemon=True).start()
             
             # Read stdout line-by-line blockingly
             for line in iter(proc.stdout.readline, ""):
+                last_seen[0] = time.monotonic()
                 line = line.strip().replace('\r', '')
-                if not line:
+                if not line or line == "TICK":
                     continue
                 
                 # Handle Clipboard Sync
@@ -1290,13 +1526,7 @@ done
                         continue
                     try:
                         decoded_val = base64.b64decode(encoded_val).decode('utf-8')
-                        with sync_state_lock:
-                            if decoded_val != CURRENT_CLIPBOARD_CONTENT:
-                                print(f"[Android] Clipboard changed: {decoded_val[:20]}...")
-                                CURRENT_CLIPBOARD_CONTENT = decoded_val
-                                db.add_item(CURRENT_CLIPBOARD_CONTENT)
-                                set_mac_clipboard("text", decoded_val)
-                                send_mac_notification("Nothing Clipboard", f"Copied: {decoded_val[:30]}")
+                        apply_incoming_clip({"format": "text", "data": decoded_val})
                     except Exception as e:
                         print(f"[Sync] Error decoding Android clipboard: {e}")
                         
@@ -1317,23 +1547,25 @@ done
                     if not filename:
                         continue
                     print(f"[Android] New file drop: {filename}")
-                    threading.Thread(target=pull_file_from_android, args=(filename,)).start()
+                    threading.Thread(target=pull_file_from_android, args=(filename,), daemon=True).start()
                 else:
                     # Ignore all other output/warnings to keep daemon stable
                     print(f"[ADB Stream Warning] Unexpected line: {line}")
             
             proc.wait()
             print("[ADB Stream] Process exited")
-            if app_delegate and not has_live_session():
-                app_delegate.set_connected(False)
         except Exception as e:
             print(f"[ADB Stream] Connection broke: {e}")
-            if app_delegate and not has_live_session():
-                app_delegate.set_connected(False)
+        adb_link_up = False
+        refresh_connection_state()
         time.sleep(3)
 
-# Helper to create styled template images for status bar
+# Helper to create styled template images for status bar (drawn once, then reused)
+_dot_images = {}
+
 def create_template_dot(filled=True):
+    if filled in _dot_images:
+        return _dot_images[filled]
     img = NSImage.alloc().initWithSize_((16, 16))
     img.setTemplate_(True)
     img.lockFocus()
@@ -1346,6 +1578,7 @@ def create_template_dot(filled=True):
         path.setLineWidth_(1.5)
         path.stroke()
     img.unlockFocus()
+    _dot_images[filled] = img
     return img
 
 def get_current_mac_clipboard_text():
@@ -1354,26 +1587,26 @@ def get_current_mac_clipboard_text():
     return content if content else ""
 
 def push_file_to_android(local_path):
-    filename = os.path.basename(local_path)
-    remote_path = f"{DROP_ZONE_ANDROID}/{filename}"
     try:
-        subprocess.run(["adb", "shell", f"mkdir -p {DROP_ZONE_ANDROID}"], check=True, capture_output=True)
-        res = subprocess.run(["adb", "push", local_path, remote_path], check=True, capture_output=True)
-        if res.returncode == 0:
-            print(f"[Sync] Pushed to Phone: {filename}")
-            send_android_notification("Nothing Drop", f"Received: {filename}")
-            send_mac_notification("Nothing AirShare", f"Successfully sent {filename} to phone.")
+        send_file_to_phone(local_path, confirm_on_mac=True)
     except Exception as e:
-        print(f"[Error] Failed to push {filename}: {e}")
-        send_mac_notification("Nothing AirShare Error", f"Failed to push {filename}: {e}")
+        print(f"[Error] Failed to send {os.path.basename(local_path)}: {e}")
+        send_mac_notification("Nothing AirShare Error", f"Failed to send {os.path.basename(local_path)}: {e}")
 
 def trigger_phone_ring():
     print("[Find My Phone] Triggering phone alarm...")
-    res = subprocess.run(["adb", "shell", "am", "broadcast", "-a", "clipper.ring"], capture_output=True, text=True)
-    if res.returncode == 0:
-        print("[Find My Phone] Broadcast sent successfully.")
+    if push_to_phones({"type": "find_phone"}):
+        print("[Find My Phone] Broadcast sent successfully over TCP session.")
+        return
+
+    # Explicit component: Android 8+ never delivers implicit broadcasts to
+    # manifest receivers, so the old bare `-a clipper.ring` was silently dropped.
+    res = adb("shell", f"am broadcast -n {AIRSHARE_RECEIVER} -a clipper.ring -f 32")
+    if res.returncode == 0 and "Permission Denial" not in res.stdout + res.stderr:
+        print("[Find My Phone] Broadcast sent successfully via ADB fallback.")
     else:
-        print(f"[Find My Phone] Error sending broadcast: {res.stderr}")
+        print(f"[Find My Phone] Error sending broadcast via ADB: {res.stderr.strip() or res.stdout.strip()}")
+        send_mac_notification("Nothing AirShare", "Couldn't reach your phone to ring it.")
 
 def run_local_command(cmd_id):
     commands_dict = {
@@ -1525,6 +1758,7 @@ class NothingPopoverViewController(NSViewController):
             self.app_delegate = None
             self.button_device_map = {}
             self.button_history_map = {}
+            self._last_snapshot = None
         print(f"[PopoverVC] init returning {self}")
         return self
 
@@ -1562,7 +1796,7 @@ class NothingPopoverViewController(NSViewController):
         title_label.setFrame_(((32, 10), (200, 20)))
         header_bg.addSubview_(title_label)
         
-        version_label = NSTextField.labelWithString_("v2.9.1")
+        version_label = NSTextField.labelWithString_(f"v{APP_VERSION}")
         version_label.setFont_(NSFont.systemFontOfSize_(10))
         version_label.setTextColor_(NSColor.grayColor())
         version_label.setFrame_(((300, 10), (44, 20)))
@@ -1671,7 +1905,21 @@ class NothingPopoverViewController(NSViewController):
         
         self.refresh_data()
 
-    def refresh_data(self):
+    def refresh_data(self, force=False):
+        # Runs every 2s while the popover is open; only rebuild when something
+        # visible changed instead of tearing down and recreating every row.
+        delegate = self.app_delegate
+        devices = list(bonjour_manager.discovered_devices) if bonjour_manager else []
+        history = db.get_history() if db else []
+        snapshot = (
+            bool(delegate and delegate.connected),
+            getattr(delegate, "battery_level", None), getattr(delegate, "charging", None),
+            getattr(delegate, "device_model", None), tuple(devices[:3]), tuple(history[:3]),
+        )
+        if snapshot == self._last_snapshot and not force:
+            return
+        self._last_snapshot = snapshot
+
         # Clear stale button maps to prevent memory leaks (M4)
         self.button_device_map.clear()
         self.button_history_map.clear()
@@ -1694,11 +1942,6 @@ class NothingPopoverViewController(NSViewController):
             subview.removeFromSuperview()
             
         y_offset = 25
-        devices = []
-        if bonjour_manager and bonjour_manager.discovered_devices:
-            for name in bonjour_manager.discovered_devices:
-                devices.append(name)
-                
         if not devices:
             lbl = NSTextField.labelWithString_("No nearby sharing devices found")
             lbl.setFont_(NSFont.systemFontOfSize_(11))
@@ -1730,7 +1973,6 @@ class NothingPopoverViewController(NSViewController):
             subview.removeFromSuperview()
             
         y_offset = 32
-        history = db.get_history() if db else []
         if not history:
             lbl = NSTextField.labelWithString_("Clipboard history is empty")
             lbl.setFont_(NSFont.systemFontOfSize_(11))
@@ -1776,7 +2018,7 @@ class NothingPopoverViewController(NSViewController):
             send_mac_notification("Clipboard Restored", f"Restored: {text[:30]}")
             self.refresh_data()
             if self.app_delegate and self.app_delegate.connected:
-                threading.Thread(target=push_to_android_clipboard, args=({"type": "text", "data": text},), daemon=True).start()
+                threading.Thread(target=sync_clipboard_to_phone, args=({"type": "text", "data": text},), daemon=True).start()
 
     @objc.IBAction
     def sendToNearbyDevice_(self, sender):
@@ -1809,7 +2051,7 @@ class NothingPopoverViewController(NSViewController):
         clip_text = get_current_mac_clipboard_text()
         if clip_text:
             send_mac_notification("Nothing Clipboard", "Syncing clipboard to phone...")
-            threading.Thread(target=push_to_android_clipboard, args=({"type": "text", "data": clip_text},), daemon=True).start()
+            threading.Thread(target=sync_clipboard_to_phone, args=({"type": "text", "data": clip_text},), daemon=True).start()
         else:
             send_mac_notification("Nothing Clipboard", "Mac clipboard is empty.")
 
@@ -1874,11 +2116,13 @@ class ApplicationBootstrap(NSObject):
         button.setImage_(create_template_dot(filled=False))
         button.setImagePosition_(2) # NSImageLeft
         
-        app_delegate = self
+        # Initialise state before publishing app_delegate: the TCP server thread is
+        # already running and a phone that connects instantly reads these.
         self.connected = False
         self.battery_level = "--"
         self.charging = False
         self.device_model = "Nothing Phone"
+        app_delegate = self
         
         # Create Popover and Popover ViewController
         self.popover = NSPopover.alloc().init()
@@ -1915,6 +2159,8 @@ class ApplicationBootstrap(NSObject):
         observer.start()
 
     def set_connected(self, val):
+        if self.connected == val:
+            return
         self.connected = val
         self.update_menu()
 
@@ -2020,7 +2266,7 @@ class ApplicationBootstrap(NSObject):
         text = sender.representedObject()
         if text:
             set_mac_clipboard("text", text)
-            print(f"[UI] Restored from history: {text[:20]}...")
+            print(f"[UI] Restored from history ({len(text)} chars)")
 
     def sendFileToDevice_(self, sender):
         device_name = sender.representedObject()
@@ -2063,10 +2309,10 @@ class ApplicationBootstrap(NSObject):
 
     def connectADB_(self, sender):
         print("[AppBootstrap] connectADB_ called!")
-        threading.Thread(target=self.show_connect_dialog).start()
+        threading.Thread(target=self.show_connect_dialog, daemon=True).start()
 
     def installHelper_(self, sender):
-        threading.Thread(target=self.run_install_helper).start()
+        threading.Thread(target=self.run_install_helper, daemon=True).start()
 
     def run_install_helper(self):
         local_apk_path = os.path.expanduser("~/.nothing_sync/NothingAirShare.apk")
@@ -2086,9 +2332,9 @@ class ApplicationBootstrap(NSObject):
             print("[Helper Install] Installing custom APK on phone: " + local_apk_path)
             
             # Accept ADB installs bypass settings first to ensure smooth installation
-            subprocess.run(["adb", "shell", "settings put global verifier_verify_adb_installs 0"], capture_output=True)
+            adb("shell", "settings put global verifier_verify_adb_installs 0")
             
-            res = subprocess.run(["adb", "install", "-r", local_apk_path], capture_output=True, text=True)
+            res = adb("install", "-r", local_apk_path, timeout=300)
             
             if res.returncode == 0:
                 print("[Helper Install] Successfully installed custom APK on phone.")
@@ -2150,7 +2396,7 @@ class ApplicationBootstrap(NSObject):
                 config = load_config()
                 config["last_address"] = address
                 save_config(config)
-                threading.Thread(target=run_adb_connect, args=(address,)).start()
+                threading.Thread(target=run_adb_connect, args=(address,), daemon=True).start()
         elif response == 1001:  # Pair Device
             self.performSelectorOnMainThread_withObject_waitUntilDone_(
                 "runPairDialogOnMainThread", None, False
@@ -2199,10 +2445,10 @@ class ApplicationBootstrap(NSObject):
             address = ip_field.stringValue()
             code = code_field.stringValue()
             if address and code:
-                threading.Thread(target=self.run_adb_pair_bg, args=(address, code)).start()
+                threading.Thread(target=self.run_adb_pair_bg, args=(address, code), daemon=True).start()
 
     def run_adb_pair_bg(self, address, code):
-        print(f"[ADB] Pairing with {address} using code {code}...")
+        print(f"[ADB] Pairing with {address}...")
         send_mac_notification("Nothing AirShare", f"Pairing with {address}...")
         success, out = run_adb_pair(address, code)
         if success:
@@ -2226,14 +2472,74 @@ class ApplicationBootstrap(NSObject):
         print("[AppBootstrap] quitApp_ called!")
         NSApplication.sharedApplication().terminate_(None)
 
+class RotatingLog:
+    """stdout/stderr replacement for the bundled .app, which has no console (all
+    print() output used to vanish). Timestamps lines and keeps one backup."""
+
+    def __init__(self, path, max_bytes):
+        self.path = path
+        self.max_bytes = max_bytes
+        self.lock = threading.Lock()
+        self.at_line_start = True
+        self.f = open(path, "a", encoding="utf-8", errors="replace")
+
+    def write(self, text):
+        with self.lock:
+            if self.at_line_start and text not in ("\n", ""):
+                self.f.write(time.strftime("%m-%d %H:%M:%S "))
+            self.f.write(text)
+            self.at_line_start = text.endswith("\n")
+            self.f.flush()
+            if self.at_line_start and self.f.tell() > self.max_bytes:
+                self.f.close()
+                os.replace(self.path, self.path + ".1")
+                self.f = open(self.path, "a", encoding="utf-8", errors="replace")
+        return len(text)
+
+    def flush(self):
+        with self.lock:
+            self.f.flush()
+
+    def isatty(self):
+        return False
+
+
+def setup_logging():
+    if sys.stdout is not None and sys.stdout.isatty():
+        return  # running from a terminal: keep printing there
+    try:
+        sys.stdout = sys.stderr = RotatingLog(LOG_FILE, LOG_MAX_BYTES)
+    except OSError as e:
+        print(f"[Log] Could not open {LOG_FILE}: {e}")
+
+
+_instance_lock_file = None
+
+def acquire_single_instance_lock():
+    """Refuse to start a second copy (e.g. the .app plus the legacy launchd agent):
+    two daemons fight over port 53317 and keep restarting each other's adb server."""
+    global _instance_lock_file
+    try:
+        _instance_lock_file = open(os.path.join(CONFIG_DIR, "daemon.lock"), "w")
+        fcntl.flock(_instance_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
 def main():
+    setup_logging()
+    print(f"===== Nothing AirShare v{APP_VERSION} starting =====")
+    if not acquire_single_instance_lock():
+        print("[Startup] Another Nothing AirShare instance is already running; exiting.")
+        send_mac_notification("Nothing AirShare", "Already running — look for the dot in your menu bar.", wait=True)
+        return
+
     # Disable ADB's built-in mDNS to prevent duplicate device connections
     os.environ["ADB_MDNS"] = "0"
-    try:
-        subprocess.run(["adb", "kill-server"], capture_output=True)
-        subprocess.run(["adb", "start-server"], capture_output=True)
-    except Exception as e:
-        print(f"[ADB Init Warning] Failed to restart ADB server: {e}")
+    adb("kill-server", device=False, timeout=10)
+    if adb("start-server", device=False, timeout=20).returncode != 0:
+        print("[ADB Init Warning] Failed to restart ADB server")
 
     app = NSApplication.sharedApplication()
     # Set as accessory app (menu bar only, no Dock icon, no main window)

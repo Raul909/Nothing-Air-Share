@@ -26,9 +26,7 @@ import androidx.core.view.setPadding
 import androidx.drawerlayout.widget.DrawerLayout
 import com.nothing.airshare.databinding.ActivityMainBinding
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.InetAddress
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
@@ -42,7 +40,11 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    private var selectedDeviceTarget: Pair<InetAddress, Int>? = null
+    // host (IP or name) + port; resolved on the transfer thread, not the UI thread
+    private var selectedDeviceTarget: Pair<String, Int>? = null
+    private var lastDeviceListSignature: String? = null
+    // Share-sheet copies run here; large files used to be copied on the UI thread.
+    private val ioExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var isClipboardExpanded = false
     private lateinit var clipboard: ClipboardManager
     private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
@@ -65,14 +67,61 @@ class MainActivity : AppCompatActivity() {
 
     // Register a file picker launcher for direct P2P transfer
     private val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null && selectedDeviceTarget != null) {
+        if (uri == null) return@registerForActivityResult
+        val target = selectedDeviceTarget
+        if (target != null) {
             try {
-                val target = selectedDeviceTarget!!
                 // Stream file directly from URI instead of copying to cache (K3)
-                FileTransferService.sendFileFromUri(this, uri, target.first, target.second)
+                FileTransferService.sendFileFromUri(applicationContext, uri, target.first, target.second)
             } catch (e: Exception) {
                 Toast.makeText(this, "Failed to prepare file: ${e.message}", Toast.LENGTH_SHORT).show()
             }
+        } else {
+            // No LAN target: queue it for the Mac to pull over ADB (this branch was
+            // missing, so the picked file was silently dropped).
+            saveSharedFileToSyncFolder(uri)
+        }
+    }
+
+    // UI callbacks handed to the long-lived service singletons. Kept as fields so
+    // onDestroy can detach exactly these (and not a newer Activity's).
+    private val connectionUiListener: (Boolean) -> Unit = { connected ->
+        runOnUiThread { binding.tvStatus.text = if (connected) "Connected to Mac" else "Searching for Mac..." }
+    }
+    private val devicesUiListener: () -> Unit = { runOnUiThread { updateDeviceListUI() } }
+    private val progressUiHandler: (Double) -> Unit = { progress ->
+        runOnUiThread {
+            binding.progressBarTransfer.visibility = View.VISIBLE
+            binding.progressBarTransfer.progress = (progress * 100).toInt()
+            if (progress >= 1.0) {
+                binding.progressBarTransfer.visibility = View.GONE
+            }
+        }
+    }
+    private val statusUiHandler: (String) -> Unit = { msg ->
+        runOnUiThread {
+            binding.tvStatus.text = msg
+        }
+    }
+    private val transferPrompt: (String, String, Long, (Boolean) -> Unit) -> Unit = { sender, fileName, fileSize, callback ->
+        runOnUiThread {
+            // Showing a dialog on a finished Activity throws BadTokenException,
+            // which took down the process (and the sync service with it).
+            if (isFinishing || isDestroyed) {
+                callback(false)
+                return@runOnUiThread
+            }
+            AlertDialog.Builder(this)
+                .setTitle("Incoming File Share")
+                .setMessage("Accept file '$fileName' (${formatFileSize(fileSize)}) from $sender?")
+                .setPositiveButton("Accept") { _, _ ->
+                    callback(true)
+                }
+                .setNegativeButton("Decline") { _, _ ->
+                    callback(false)
+                }
+                .setCancelable(false)
+                .show()
         }
     }
 
@@ -114,43 +163,13 @@ class MainActivity : AppCompatActivity() {
         // 2. Networking (NSD discovery, TCP server, duplex Mac session, clipboard &
         //    battery bridges) all live in SyncService now so sync survives the app
         //    being backgrounded. Observe its discovered-device set for the drawer UI.
-        SyncService.devicesChanged = { runOnUiThread { updateDeviceListUI() } }
-        MacSession.connectionListener = { connected ->
-            runOnUiThread { binding.tvStatus.text = if (connected) "Connected to Mac" else "Searching for Mac..." }
-        }
+        SyncService.devicesChanged = devicesUiListener
+        MacSession.connectionListener = connectionUiListener
 
         // 3. Bind File Transfer Callbacks to UI
-        FileTransferService.progressHandler = { progress ->
-            runOnUiThread {
-                binding.progressBarTransfer.visibility = View.VISIBLE
-                binding.progressBarTransfer.progress = (progress * 100).toInt()
-                if (progress >= 1.0) {
-                    binding.progressBarTransfer.visibility = View.GONE
-                }
-            }
-        }
-
-        FileTransferService.statusHandler = { msg ->
-            runOnUiThread {
-                binding.tvStatus.text = msg
-            }
-        }
-
-        FileTransferService.incomingTransferHandler = { sender, fileName, fileSize, callback ->
-            runOnUiThread {
-                AlertDialog.Builder(this)
-                    .setTitle("Incoming File Share")
-                    .setMessage("Accept file '$fileName' (${formatFileSize(fileSize)}) from $sender?")
-                    .setPositiveButton("Accept") { _, _ ->
-                        callback(true)
-                    }
-                    .setNegativeButton("Decline") { _, _ ->
-                        callback(false)
-                    }
-                    .setCancelable(false)
-                    .show()
-            }
-        }
+        FileTransferService.progressHandler = progressUiHandler
+        FileTransferService.statusHandler = statusUiHandler
+        FileTransferService.incomingTransferHandler = transferPrompt
 
         // Bind Clipboard operations
         binding.btnCopy.setOnClickListener {
@@ -173,9 +192,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Start polling the outgoing folder and updating UI
-        handler.post(checkFolderRunnable)
-
         // --- Drawer setup ---
         val drawerLayout = binding.root
         binding.btnMenu.setOnClickListener {
@@ -187,7 +203,7 @@ class MainActivity : AppCompatActivity() {
 
         // Load settings values into inputs
         val savedMacIp = prefs.getString("mac_ip", "") ?: ""
-        val savedMacPort = prefs.getInt("mac_port", 53318)
+        val savedMacPort = prefs.getInt("mac_port", SyncService.MAC_LAN_PORT).let { if (it == 53318) SyncService.MAC_LAN_PORT else it }
         val savedClipboardSync = prefs.getBoolean("pref_clipboard_sync", true)
         val savedFindPhone = prefs.getBoolean("pref_find_phone", true)
         val savedRemoteInput = prefs.getBoolean("pref_remote_input", true)
@@ -238,7 +254,7 @@ class MainActivity : AppCompatActivity() {
             val macPortStr = binding.etMacPort.text.toString().trim()
             val localPortStr = binding.etLocalPort.text.toString().trim()
 
-            val macPort = macPortStr.toIntOrNull() ?: 53318
+            val macPort = macPortStr.toIntOrNull() ?: SyncService.MAC_LAN_PORT
             val localPort = localPortStr.toIntOrNull() ?: 53317
             val pin = binding.etSecurityPin.text.toString().trim()
             val clipboardSync = binding.switchClipboardSync.isChecked
@@ -269,6 +285,7 @@ class MainActivity : AppCompatActivity() {
                 apply()
             }
             FileTransferService.securityPin = pin
+            SyncService.applyManualTarget(this)
             applyFontSettings()
 
             val mode = when (selectedTheme) {
@@ -296,12 +313,10 @@ class MainActivity : AppCompatActivity() {
 
         // --- Card click handlers ---
         binding.cardSendFiles.setOnClickListener {
-            selectedDeviceTarget?.let {
-                filePickerLauncher.launch("*/*")
-            } ?: run {
-                // No device selected — open file picker anyway for ADB queue
-                filePickerLauncher.launch("*/*")
-            }
+            // Straight to the Mac over Wi-Fi when the session is up; otherwise the
+            // picked file is queued for the Mac to pull over ADB.
+            selectedDeviceTarget = if (MacSession.isConnected) macTarget() else null
+            filePickerLauncher.launch("*/*")
         }
 
         binding.cardClipboard.setOnClickListener {
@@ -420,37 +435,66 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveSharedFileToSyncFolder(uri: Uri) {
-        try {
-            val targetDir = File(getExternalFilesDir(null), "ToMac")
-            if (!targetDir.exists()) {
-                targetDir.mkdirs()
-            }
-            val fileName = getFileName(this, uri)
-            val outputFile = File(targetDir, fileName)
-            
-            val parcelFileDescriptor = contentResolver.openFileDescriptor(uri, "r")
-            val fileDescriptor = parcelFileDescriptor?.fileDescriptor ?: return
-            val inputStream = FileInputStream(fileDescriptor)
-            val outputFileStream = FileOutputStream(outputFile)
-            
-            inputStream.use { input ->
-                outputFileStream.use { output ->
-                    input.copyTo(output)
+        val ctx = applicationContext
+        val targetDir = File(getExternalFilesDir(null), "ToMac")
+        ioExecutor.execute {
+            val message = try {
+                if (!targetDir.exists()) {
+                    targetDir.mkdirs()
                 }
+                val fileName = FileTransferService.safeFileName(getFileName(ctx, uri))
+                val outputFile = uniqueFile(targetDir, fileName)
+                // Copy under a hidden .part name and rename when done: the Mac lists
+                // this folder over ADB and would otherwise pull a half-written file.
+                val partFile = File(targetDir, ".${outputFile.name}.part")
+                try {
+                    val input = ctx.contentResolver.openInputStream(uri) ?: throw Exception("Cannot open file")
+                    input.use { inp -> FileOutputStream(partFile).use { inp.copyTo(it, 262144) } }
+                    if (!partFile.renameTo(outputFile)) throw Exception("Could not queue file")
+                } finally {
+                    partFile.delete()
+                }
+                "Added to Sync queue: ${outputFile.name}"
+            } catch (e: Exception) {
+                "Failed to queue file: ${e.message}"
             }
-            parcelFileDescriptor.close()
-            Toast.makeText(this, "Added to Sync queue: $fileName", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Failed to queue file: ${e.message}", Toast.LENGTH_LONG).show()
+            handler.post { Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show() }
         }
     }
 
-    private fun updateDeviceListUI() {
-        binding.llDevicesContainer.removeAllViews()
+    private fun uniqueFile(dir: File, fileName: String): File {
+        var file = File(dir, fileName)
+        var counter = 1
+        while (file.exists()) {
+            val ext = File(fileName).extension
+            val base = File(fileName).nameWithoutExtension
+            file = File(dir, if (ext.isNotEmpty()) "$base-$counter.$ext" else "$base-$counter")
+            counter++
+        }
+        return file
+    }
 
+    /** The Mac we'd send to directly: the manual IP from Settings, else NSD. */
+    private fun macTarget(): Pair<String, Int>? {
+        SyncService.manualMacHost?.let { return it to SyncService.MAC_LAN_PORT }
+        return SyncService.discoveredDevices.entries
+            .firstOrNull { it.key.contains("Mac", ignoreCase = true) }
+            ?.let { (_, target) -> target.first.hostAddress?.let { it to target.second } }
+    }
+
+    private fun updateDeviceListUI() {
         val discoveredDevices = SyncService.discoveredDevices
         val targetDir = File(getExternalFilesDir(null), "ToMac")
-        val pendingFiles = targetDir.listFiles()?.filter { it.isFile } ?: emptyList()
+        val pendingFiles = targetDir.listFiles()?.filter { it.isFile && !it.name.startsWith(".") } ?: emptyList()
+
+        // Polled every second while visible; only rebuild the rows when the
+        // device set or the pending queue actually changed.
+        val signature = discoveredDevices.keys.sorted().joinToString("|") + "#" +
+            pendingFiles.joinToString("|") { "${it.name}:${it.length()}" }
+        if (signature == lastDeviceListSignature) return
+        lastDeviceListSignature = signature
+
+        binding.llDevicesContainer.removeAllViews()
 
         if (discoveredDevices.isEmpty() && pendingFiles.isEmpty()) {
             // Detach first — tvNoDevices is a shared view and re-adding it while it
@@ -494,7 +538,7 @@ class MainActivity : AppCompatActivity() {
                 typeface = ResourcesCompat.getFont(this@MainActivity, R.font.ndot57)
                 textSize = 12f
                 setOnClickListener {
-                    selectedDeviceTarget = target
+                    selectedDeviceTarget = target.first.hostAddress?.let { it to target.second }
                     filePickerLauncher.launch("*/*")
                 }
             }
@@ -803,21 +847,38 @@ class MainActivity : AppCompatActivity() {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:\$packageName")
+                    data = Uri.parse("package:$packageName")
                 })
             }
         } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "Battery optimization request failed: \${e.message}")
+            android.util.Log.e("MainActivity", "Battery optimization request failed: ${e.message}")
         }
+    }
+
+    // The device list only needs polling while it can be seen.
+    override fun onResume() {
+        super.onResume()
+        lastDeviceListSignature = null
+        handler.post(checkFolderRunnable)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        handler.removeCallbacks(checkFolderRunnable)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(checkFolderRunnable)
         clipboard.removePrimaryClipChangedListener(clipboardListener)
+        ioExecutor.shutdown()
         // Networking lives in SyncService and keeps running in the background;
-        // just detach the UI callbacks so this Activity can be collected.
-        SyncService.devicesChanged = null
-        MacSession.connectionListener = null
+        // just detach this Activity's UI callbacks so it can be collected (and a
+        // transfer arriving later is declined instead of prompting a dead window).
+        if (SyncService.devicesChanged === devicesUiListener) SyncService.devicesChanged = null
+        if (MacSession.connectionListener === connectionUiListener) MacSession.connectionListener = null
+        if (FileTransferService.progressHandler === progressUiHandler) FileTransferService.progressHandler = null
+        if (FileTransferService.statusHandler === statusUiHandler) FileTransferService.statusHandler = null
+        if (FileTransferService.incomingTransferHandler === transferPrompt) FileTransferService.incomingTransferHandler = null
     }
 }
