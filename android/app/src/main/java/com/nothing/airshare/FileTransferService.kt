@@ -10,7 +10,6 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -265,7 +264,7 @@ object FileTransferService {
      * Only providers that don't report a size get spooled to cache first, because
      * the receiver needs the exact length up front.
      */
-    fun sendFileFromUri(context: Context, uri: android.net.Uri, host: InetAddress, port: Int) {
+    fun sendFileFromUri(context: Context, uri: android.net.Uri, host: String, port: Int) {
         thread(name = "FileTransfer-out") {
             var spooled: File? = null
             try {

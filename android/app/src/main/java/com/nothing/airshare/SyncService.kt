@@ -11,10 +11,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.ServiceCompat
@@ -35,11 +39,24 @@ class SyncService : Service(), NsdHelper.NsdListener {
     private var batteryReceiver: BroadcastReceiver? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var batteryPct = -1
+    @Volatile private var batteryCharging = false
+    @Volatile private var lastBatterySend = 0L
+    private val sendBatteryRunnable = Runnable { sendBatteryNow() }
 
     companion object {
         const val TAG = "SyncService"
         const val CHANNEL_ID = "nothing_airshare_sync"
         const val NOTIF_ID = 42
+        /** The Mac daemon serves the session, commands and files on this one port. */
+        const val MAC_LAN_PORT = 53317
+        private const val BATTERY_MIN_INTERVAL_MS = 30_000L
+
+        /** Set when Settings has a manual Mac IP; NSD results then don't override it. */
+        @Volatile var manualMacHost: String? = null
 
         /** Devices discovered on the LAN, shared with the UI (name -> host,port). */
         val discoveredDevices = java.util.concurrent.ConcurrentHashMap<String, Pair<InetAddress, Int>>()
@@ -49,6 +66,23 @@ class SyncService : Service(), NsdHelper.NsdListener {
         fun start(context: Context) {
             val intent = Intent(context, SyncService::class.java)
             androidx.core.content.ContextCompat.startForegroundService(context, intent)
+        }
+
+        /** Settings -> Connection -> "Manual Mac IP" (for networks that block
+         *  Bonjour/NSD). It was saved but never used before. */
+        fun applyManualTarget(context: Context) {
+            val prefs = context.getSharedPreferences("NothingAirSharePrefs", Context.MODE_PRIVATE)
+            val ip = prefs.getString("mac_ip", "")?.trim().orEmpty()
+            manualMacHost = ip.ifEmpty { null }
+            if (ip.isNotEmpty()) {
+                // 53318 was the old command-port default; nothing listens there now.
+                val port = prefs.getInt("mac_port", MAC_LAN_PORT).let { if (it == 53318) MAC_LAN_PORT else it }
+                MacSession.setTarget(ip, port)
+            } else {
+                discoveredDevices.entries.firstOrNull { it.key.contains("Mac", ignoreCase = true) }?.let { (_, target) ->
+                    target.first.hostAddress?.let { MacSession.setTarget(it, target.second) }
+                }
+            }
         }
     }
 
@@ -65,10 +99,14 @@ class SyncService : Service(), NsdHelper.NsdListener {
         // 1. File server
         FileTransferService.port = localPort
         FileTransferService.securityPin = pin
+        FileTransferService.appContext = applicationContext
         FileTransferService.startServer()
 
-        // 2. Duplex session to the Mac
+        // 2. Duplex session to the Mac. Re-send battery on every (re)connect so the
+        // menu bar isn't blank until the level next changes.
         MacSession.init(this)
+        MacSession.onConnected = { sendBatteryNow() }
+        applyManualTarget(this)
 
         // 3. NSD discovery + advertising (single owner)
         nsdHelper = NsdHelper(this, this)
@@ -81,6 +119,7 @@ class SyncService : Service(), NsdHelper.NsdListener {
 
         // 5. Background Keep-Alive Locks
         acquireLocks()
+        registerNetworkCallback()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -93,6 +132,11 @@ class SyncService : Service(), NsdHelper.NsdListener {
     override fun onDestroy() {
         super.onDestroy()
         releaseLocks()
+        mainHandler.removeCallbacks(sendBatteryRunnable)
+        networkCallback?.let { cb ->
+            runCatching { getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) }
+        }
+        MacSession.onConnected = null
         clipListener?.let { clipboard?.removePrimaryClipChangedListener(it) }
         batteryReceiver?.let { runCatching { unregisterReceiver(it) } }
         nsdHelper.stop()
@@ -105,8 +149,9 @@ class SyncService : Service(), NsdHelper.NsdListener {
     override fun onDeviceDiscovered(name: String, host: InetAddress, port: Int) {
         discoveredDevices[name] = Pair(host, port)
         devicesChanged?.invoke()
-        // Connect to a Mac endpoint (Mac advertises "Mac Nothing Share").
-        if (name.contains("Mac", ignoreCase = true)) {
+        // Connect to a Mac endpoint (Mac advertises "Mac Nothing Share"), unless the
+        // user pinned a manual IP in Settings.
+        if (name.contains("Mac", ignoreCase = true) && manualMacHost == null) {
             MacSession.setTarget(host.hostAddress ?: return, port)
         }
     }
@@ -134,9 +179,6 @@ class SyncService : Service(), NsdHelper.NsdListener {
 
     private fun registerBatteryReceiver() {
         val receiver = object : BroadcastReceiver() {
-            private var lastPct = -1
-            private var lastCharging = false
-            private var lastSend = 0L
             override fun onReceive(context: Context, intent: Intent) {
                 val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
                 val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
@@ -144,17 +186,43 @@ class SyncService : Service(), NsdHelper.NsdListener {
                 val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
                 val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
                     status == BatteryManager.BATTERY_STATUS_FULL
-                if (pct == lastPct && charging == lastCharging) return
-                lastPct = pct; lastCharging = charging
-                // Debounce to at most once / 30s, but still send the latest value.
-                val now = System.currentTimeMillis()
-                if (now - lastSend < 30_000L && lastSend != 0L) return
-                lastSend = now
-                MacSession.sendBattery(pct, charging)
+                if (pct == batteryPct && charging == batteryCharging) return
+                val pluggedChanged = charging != batteryCharging
+                batteryPct = pct; batteryCharging = charging
+                // Debounce to at most once / 30s, but always deliver the latest
+                // value with a trailing send (the old code dropped it), and report
+                // plug/unplug immediately.
+                mainHandler.removeCallbacks(sendBatteryRunnable)
+                val wait = BATTERY_MIN_INTERVAL_MS - (System.currentTimeMillis() - lastBatterySend)
+                if (pluggedChanged || wait <= 0) sendBatteryNow()
+                else mainHandler.postDelayed(sendBatteryRunnable, wait)
             }
         }
         registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         batteryReceiver = receiver
+    }
+
+    private fun sendBatteryNow() {
+        if (batteryPct < 0) return
+        lastBatterySend = System.currentTimeMillis()
+        MacSession.sendBattery(batteryPct, batteryCharging)
+    }
+
+    /** Wi-Fi came back or roamed: retry the Mac right away instead of sitting out
+     *  up to 15s of reconnect backoff. */
+    private fun registerNetworkCallback() {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                MacSession.reconnectNow()
+            }
+        }
+        try {
+            cm.registerDefaultNetworkCallback(cb)
+            networkCallback = cb
+        } catch (e: Exception) {
+            Log.e(TAG, "Network callback registration failed: ${e.message}")
+        }
     }
 
     // ── Background Keep-Alive Locks ───────────────────────────────────────────
@@ -170,9 +238,9 @@ class SyncService : Service(), NsdHelper.NsdListener {
                 setReferenceCounted(false)
                 acquire()
             }
-            Log.d(TAG, "Wi-Fi lock acquired (mode=\$mode)")
+            Log.d(TAG, "Wi-Fi lock acquired (mode=$mode)")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to acquire Wi-Fi lock: \${e.message}")
+            Log.e(TAG, "Failed to acquire Wi-Fi lock: ${e.message}")
         }
 
         try {
@@ -183,7 +251,7 @@ class SyncService : Service(), NsdHelper.NsdListener {
             }
             Log.d(TAG, "Partial wake lock acquired")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to acquire wake lock: \${e.message}")
+            Log.e(TAG, "Failed to acquire wake lock: ${e.message}")
         }
     }
 
