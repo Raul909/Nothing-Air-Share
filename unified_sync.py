@@ -1061,11 +1061,13 @@ def push_file_over_adb(local_path):
 
 
 def find_phone_peer():
-    """A phone advertising _nothing-share._tcp over Bonjour, for LAN transfers."""
+    """A phone advertising _nothing-share._tcp over Bonjour, for LAN transfers.
+    Other Macs running AirShare advertise the same type as "Mac Nothing Share"."""
     if not bonjour_manager:
         return None
     for name, (host, port) in dict(bonjour_manager.discovered_devices).items():
-        return name, host, port
+        if "mac" not in name.lower():
+            return name, host, port
     return None
 
 
@@ -2114,11 +2116,13 @@ class ApplicationBootstrap(NSObject):
         button.setImage_(create_template_dot(filled=False))
         button.setImagePosition_(2) # NSImageLeft
         
-        app_delegate = self
+        # Initialise state before publishing app_delegate: the TCP server thread is
+        # already running and a phone that connects instantly reads these.
         self.connected = False
         self.battery_level = "--"
         self.charging = False
         self.device_model = "Nothing Phone"
+        app_delegate = self
         
         # Create Popover and Popover ViewController
         self.popover = NSPopover.alloc().init()
