@@ -3,6 +3,69 @@
 All notable changes to **Nothing AirShare**. The newest build is always on the
 [Releases page](https://github.com/Raul909/Nothing-Air-Share/releases/latest).
 
+## v2.10.0 — Security, Stability & Performance Overhaul
+
+> **Update both sides:** install the new APK on your phone *and* re-run
+> `setup_mac.command` on your Mac. The new APK installs over the old one — no
+> uninstall needed, settings are kept.
+
+**Security** *(Mac app — please update)*
+- Fixed a critical issue where crafted clipboard text or a file name sent from
+  any device on the same Wi-Fi could run commands on the Mac (AppleScript
+  injection through notifications and the Accept dialog)
+- Incoming file names can no longer write outside the drop folder (`../` paths)
+- Logs no longer record clipboard contents, transfer PINs or ADB pairing codes
+
+**Mac — stability**
+- All ADB commands have timeouts, so a stuck `adb` can no longer freeze the app
+- Works when your phone shows up twice in ADB (USB + Wi-Fi, or mDNS + IP) —
+  no more "more than one device/emulator" failures
+- A silently dropped wireless-ADB link is detected within 30s instead of the
+  menu bar showing **Connected** forever
+- Reconnecting no longer overwrites your Mac clipboard with an old phone clip or
+  pops a "Do Not Disturb Disabled" notification
+- Phone files with spaces in their names now transfer correctly, and files are
+  never pulled while the phone is still writing them
+- Files received from the phone no longer bounce straight back to it
+- Interrupted transfers are cleaned up and reported instead of leaving a
+  truncated file that looked successful
+- **AirDrop forwarding works again** on current macOS (AirDropped files are
+  tagged `sharingd`, which the forwarder didn't recognize)
+- **Send Files**, the drop folder and AirDrop forwarding now fall back to Wi-Fi
+  when ADB isn't connected (the phone shows an Accept prompt)
+- **Find Phone** works over ADB too (the fallback broadcast was being dropped by
+  Android)
+- Connection status stays accurate when only one of ADB / Wi-Fi drops
+- Only one copy of the app can run at a time; logs are written to
+  `~/.nothing_sync/airshare.log`
+
+**Mac — performance**
+- Notifications no longer block — trackpad input stays smooth while clipboard
+  notifications are shown
+- The clipboard watcher only touches the main thread when the clipboard
+  actually changes; the popover only redraws when something changed
+- **Image clipboard sync (Mac → phone over ADB) works** — it used to error on
+  every image copy
+
+**Android — stability**
+- Fixed crashes when the sync service restarts (e.g. after changing the local
+  port), when network discovery fails to start, and when a file arrives after
+  the app screen was closed
+- Incoming files are declined if nobody can answer the prompt (instead of
+  hanging forever), saved only once complete, and show up in Files/Photos
+  immediately
+- **Send Files** with no device selected now sends to your Mac (it used to do
+  nothing); sharing large files no longer freezes the app
+- Reconnects to the Mac as soon as Wi-Fi comes back
+- The battery level on the Mac no longer goes stale, and is sent on connect
+- The **Manual Mac IP** setting now actually works (for networks that block
+  discovery)
+- The battery-optimization exemption prompt now opens correctly
+
+**Setup**
+- `setup_mac.command` keeps your installed app if the build fails, shows where
+  the build log is, and quits the old version before installing the new one
+
 ## v2.9.1 — Background Reliability, Trackpad Overhaul & Universal Media
 
 **Background Connection** *(fixes "wireless debugging keeps stopping" + clipboard dropping out)*
