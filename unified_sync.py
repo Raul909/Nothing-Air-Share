@@ -194,7 +194,7 @@ for p in ["/opt/homebrew/bin", "/usr/local/bin"]:
         os.environ["PATH"] = f"{p}:{os.environ.get('PATH', '')}"
 
 # Configuration
-APP_VERSION = "2.9.1"
+APP_VERSION = "2.10.0"
 DROP_ZONE_MAC = os.path.expanduser("~/NothingDrop")
 DROP_ZONE_ANDROID = "/sdcard/Download/NothingDrop"
 TEMP_DIR = os.path.expanduser("~/.nothing_sync_temp")
