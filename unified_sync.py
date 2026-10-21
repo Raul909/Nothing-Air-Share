@@ -12,6 +12,7 @@ import hmac
 import shlex
 import sys
 import fcntl
+import queue
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSWorkspace,
@@ -24,7 +25,7 @@ from AppKit import (
     NSRectFill, NSBezierPath, NSAlert, NSPopUpButton,
     NSImageLeft, NSPopoverBehaviorTransient, NSMinYEdge,
     NSMutableAttributedString, NSForegroundColorAttributeName,
-    NSFontAttributeName
+    NSFontAttributeName, NSPasteboardTypePNG
 )
 from Foundation import NSObject, NSURL, NSNetService, NSNetServiceBrowser
 import objc
@@ -225,6 +226,17 @@ MAX_ADB_RECONNECT_ATTEMPTS = 5
 os.makedirs(DROP_ZONE_MAC, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
+
+def remove_quietly(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+# Clipboard images left behind by earlier versions (one PNG per copy, never deleted)
+for _name in os.listdir(TEMP_DIR):
+    if _name.startswith("clip_img_"):
+        remove_quietly(os.path.join(TEMP_DIR, _name))
 
 # Global sync state
 CURRENT_CLIPBOARD_CONTENT = ""
@@ -857,21 +869,31 @@ class DownloadsAirDropHandler(FileSystemEventHandler):
 
 # SQLite Clipboard History helper
 class ClipboardHistoryDB:
+    """One shared connection (was: a new one per call) plus an in-memory copy of
+    the newest rows, so the popover's 2s refresh never touches the disk."""
+    CACHE_SIZE = 10
+    KEEP = 50
+
     def __init__(self):
         self.db_path = DB_FILE
+        self.lock = threading.Lock()
+        self.conn = None
+        self.recent = []
         self.init_db()
 
     def init_db(self):
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS history (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        content TEXT NOT NULL,
-                        timestamp REAL NOT NULL
-                    )
-                """)
-                conn.commit()
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    timestamp REAL NOT NULL
+                )
+            """)
+            self.conn.commit()
+            rows = self.conn.execute("SELECT content FROM history ORDER BY id DESC LIMIT ?", (self.CACHE_SIZE,))
+            self.recent = [row[0] for row in rows]
         except Exception as e:
             print(f"[DB Error] Init failed: {e}")
 
@@ -880,29 +902,21 @@ class ClipboardHistoryDB:
             return
         if len(content) > 10000:  # Skip storing extremely long text/data
             return
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT content FROM history ORDER BY id DESC LIMIT 1")
-                row = cursor.fetchone()
-                if row and row[0] == content:
-                    return
-                cursor.execute("INSERT INTO history (content, timestamp) VALUES (?, ?)", (content, time.time()))
-                # Keep last 50
-                cursor.execute("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 50)")
-                conn.commit()
-        except Exception as e:
-            print(f"[DB Error] Insert failed: {e}")
+        with self.lock:
+            if self.recent and self.recent[0] == content:
+                return
+            self.recent = [content] + self.recent[:self.CACHE_SIZE - 1]
+            try:
+                with self.conn:  # one transaction
+                    self.conn.execute("INSERT INTO history (content, timestamp) VALUES (?, ?)", (content, time.time()))
+                    self.conn.execute("DELETE FROM history WHERE id NOT IN "
+                                      "(SELECT id FROM history ORDER BY id DESC LIMIT ?)", (self.KEEP,))
+            except Exception as e:
+                print(f"[DB Error] Insert failed: {e}")
 
     def get_history(self):
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT content FROM history ORDER BY id DESC LIMIT 10")
-                return [row[0] for row in cursor.fetchall()]
-        except Exception as e:
-            print(f"[DB Error] Fetch failed: {e}")
-            return []
+        with self.lock:
+            return list(self.recent)
 
 # Notification Helpers
 # Untrusted text (clipboard contents, peer-supplied file names) is passed to
@@ -910,12 +924,32 @@ class ClipboardHistoryDB:
 # can be bypassed with a backslash and turned into `do shell script`.
 NOTIFY_SCRIPT = 'on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run'
 
-def send_mac_notification(title, message):
+# Launching osascript takes 100-300ms. Notifications are queued to one worker
+# instead of blocking the caller — which was often the LAN session reader, so
+# every clipboard notification also stalled trackpad input behind it.
+_notify_queue = queue.Queue(maxsize=32)
+
+def _post_notification(title, message):
     try:
-        subprocess.run(["osascript", "-e", NOTIFY_SCRIPT, str(title), str(message)],
+        subprocess.run(["osascript", "-e", NOTIFY_SCRIPT, title, message],
                        capture_output=True, timeout=10)
     except Exception as e:
         print(f"[Notification] Failed to send macOS notification: {e}")
+
+def _notification_worker():
+    while True:
+        _post_notification(*_notify_queue.get())
+
+threading.Thread(target=_notification_worker, daemon=True, name="notifications").start()
+
+def send_mac_notification(title, message, wait=False):
+    if wait:
+        _post_notification(str(title), str(message))
+        return
+    try:
+        _notify_queue.put_nowait((str(title), str(message)))
+    except queue.Full:
+        pass  # a burst is already queued; dropping one beats blocking the caller
 
 def send_android_notification(title, message):
     try:
@@ -1083,30 +1117,38 @@ class ClipboardHelper(NSObject):
             return
         
         LAST_CHANGE_COUNT = change_count
-        
+        context['result'] = (None, change_count)
+
         # 1. Check for Files
         if pb.availableTypeFromArray_([NSFilenamesPboardType]):
             files = pb.propertyListForType_(NSFilenamesPboardType)
             if files:
                 context['result'] = ({"type": "file", "data": files[0]}, change_count)
                 return
-            
-        # 2. Check for Images
-        if pb.availableTypeFromArray_([NSTIFFPboardType]):
-            image_data = pb.dataForType_(NSPNGFileType)
-            if not image_data:
-                image = NSImage.alloc().initWithPasteboard_(pb)
-                if image:
-                    tiff_data = image.TIFFRepresentation()
-                    bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
-                    image_data = bitmap.representationUsingType_properties_(NSPNGFileType, None)
-            
+
+        # 2. Check for Images. Only the ADB path can deliver them, so skip the
+        # (main-thread) PNG encode entirely when it's down and fall back to text.
+        if adb_link_up and pb.availableTypeFromArray_([NSTIFFPboardType, NSPasteboardTypePNG]):
+            try:
+                # NSPasteboardTypePNG is the pasteboard type; NSPNGFileType is a
+                # bitmap format enum and made dataForType_ raise on every copy.
+                image_data = pb.dataForType_(NSPasteboardTypePNG)
+                if not image_data:
+                    image = NSImage.alloc().initWithPasteboard_(pb)
+                    if image:
+                        tiff_data = image.TIFFRepresentation()
+                        bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
+                        image_data = bitmap.representationUsingType_properties_(NSPNGFileType, None)
+            except Exception as e:
+                print(f"[Clipboard] Could not read image: {e}")
+                image_data = None
+
             if image_data:
-                temp_path = os.path.join(TEMP_DIR, f"clip_img_{int(time.time())}.png")
+                temp_path = os.path.join(TEMP_DIR, f"clip_img_{change_count}.png")
                 image_data.writeToFile_atomically_(temp_path, True)
                 context['result'] = ({"type": "image", "data": temp_path}, change_count)
                 return
-            
+
         # 3. Check for Text
         content = pb.stringForType_(NSStringPboardType)
         if content:
@@ -1152,13 +1194,16 @@ def apply_incoming_clip(data):
     if not text:
         return
     with sync_state_lock:
-        if text != CURRENT_CLIPBOARD_CONTENT:
-            print(f"[Phone] Clipboard changed ({len(text)} chars)")
-            CURRENT_CLIPBOARD_CONTENT = text
-            if db:
-                db.add_item(text)
-            set_mac_clipboard("text", text)
-            send_mac_notification("Nothing Clipboard", f"Copied: {text[:30]}")
+        if text == CURRENT_CLIPBOARD_CONTENT:
+            return
+        CURRENT_CLIPBOARD_CONTENT = text
+        set_mac_clipboard("text", text)
+    # Disk and notification work happens outside the lock so the clipboard
+    # watcher and the other transport aren't held up behind it.
+    print(f"[Phone] Clipboard changed ({len(text)} chars)")
+    if db:
+        db.add_item(text)
+    send_mac_notification("Nothing Clipboard", f"Copied: {text[:30]}")
 
 def detect_helper_package():
     global HELPER_PACKAGE, HELPER_RECEIVER
@@ -1213,7 +1258,11 @@ def sync_clipboard_to_phone(item):
             print(f"[Sync] Text pushed to phone over session ({len(item['data'])} chars)")
             return
     # No live session (or image payload) — fall back to ADB.
-    push_to_android_clipboard(item)
+    try:
+        push_to_android_clipboard(item)
+    finally:
+        if item["type"] == "image":
+            remove_quietly(item["data"])  # temp PNG; one per image copy otherwise piles up
 
 # Native macOS Focus Check
 def get_macos_focus_state():
@@ -1299,23 +1348,30 @@ def status_polling_loop():
         time.sleep(10)
 
 def mac_clipboard_watcher():
-    # Watch Mac clipboard for copy events
+    # Watch Mac clipboard for copy events. changeCount is read here on the worker
+    # thread; we only hop to the main thread to read contents when it changes
+    # (was: a blocking main-thread round trip 5x a second, forever).
     global CURRENT_CLIPBOARD_CONTENT
     print("[Watcher] Started macOS Clipboard monitor")
+    pb = NSPasteboard.generalPasteboard()
     while True:
         try:
-            item, count = get_mac_clipboard()
-            if item:
-                if item["type"] == "text":
-                    with sync_state_lock:
-                        if item["data"] != CURRENT_CLIPBOARD_CONTENT:
-                            CURRENT_CLIPBOARD_CONTENT = item["data"]
-                            db.add_item(CURRENT_CLIPBOARD_CONTENT)
+            with objc.autorelease_pool():
+                if pb.changeCount() != LAST_CHANGE_COUNT:
+                    item, count = get_mac_clipboard()
+                    if item and item["type"] == "text":
+                        with sync_state_lock:
+                            is_new = item["data"] != CURRENT_CLIPBOARD_CONTENT
+                            if is_new:
+                                CURRENT_CLIPBOARD_CONTENT = item["data"]
+                        if is_new:
+                            db.add_item(item["data"])
                             threading.Thread(target=sync_clipboard_to_phone, args=(item,), daemon=True).start()
-                elif item["type"] == "image":
-                    threading.Thread(target=sync_clipboard_to_phone, args=(item,), daemon=True).start()
+                    elif item and item["type"] == "image":
+                        threading.Thread(target=sync_clipboard_to_phone, args=(item,), daemon=True).start()
         except Exception as e:
-            pass
+            print(f"[Watcher] Error: {e}")
+            time.sleep(1)
         time.sleep(0.2)
 
 # The ADB shell script prints TICK every ~5s; if nothing arrives for this long the
@@ -1502,8 +1558,12 @@ done
         refresh_connection_state()
         time.sleep(3)
 
-# Helper to create styled template images for status bar
+# Helper to create styled template images for status bar (drawn once, then reused)
+_dot_images = {}
+
 def create_template_dot(filled=True):
+    if filled in _dot_images:
+        return _dot_images[filled]
     img = NSImage.alloc().initWithSize_((16, 16))
     img.setTemplate_(True)
     img.lockFocus()
@@ -1516,6 +1576,7 @@ def create_template_dot(filled=True):
         path.setLineWidth_(1.5)
         path.stroke()
     img.unlockFocus()
+    _dot_images[filled] = img
     return img
 
 def get_current_mac_clipboard_text():
@@ -1695,6 +1756,7 @@ class NothingPopoverViewController(NSViewController):
             self.app_delegate = None
             self.button_device_map = {}
             self.button_history_map = {}
+            self._last_snapshot = None
         print(f"[PopoverVC] init returning {self}")
         return self
 
@@ -1841,7 +1903,21 @@ class NothingPopoverViewController(NSViewController):
         
         self.refresh_data()
 
-    def refresh_data(self):
+    def refresh_data(self, force=False):
+        # Runs every 2s while the popover is open; only rebuild when something
+        # visible changed instead of tearing down and recreating every row.
+        delegate = self.app_delegate
+        devices = list(bonjour_manager.discovered_devices) if bonjour_manager else []
+        history = db.get_history() if db else []
+        snapshot = (
+            bool(delegate and delegate.connected),
+            getattr(delegate, "battery_level", None), getattr(delegate, "charging", None),
+            getattr(delegate, "device_model", None), tuple(devices[:3]), tuple(history[:3]),
+        )
+        if snapshot == self._last_snapshot and not force:
+            return
+        self._last_snapshot = snapshot
+
         # Clear stale button maps to prevent memory leaks (M4)
         self.button_device_map.clear()
         self.button_history_map.clear()
@@ -1864,11 +1940,6 @@ class NothingPopoverViewController(NSViewController):
             subview.removeFromSuperview()
             
         y_offset = 25
-        devices = []
-        if bonjour_manager and bonjour_manager.discovered_devices:
-            for name in bonjour_manager.discovered_devices:
-                devices.append(name)
-                
         if not devices:
             lbl = NSTextField.labelWithString_("No nearby sharing devices found")
             lbl.setFont_(NSFont.systemFontOfSize_(11))
@@ -1900,7 +1971,6 @@ class NothingPopoverViewController(NSViewController):
             subview.removeFromSuperview()
             
         y_offset = 32
-        history = db.get_history() if db else []
         if not history:
             lbl = NSTextField.labelWithString_("Clipboard history is empty")
             lbl.setFont_(NSFont.systemFontOfSize_(11))
@@ -2458,7 +2528,7 @@ def main():
     print(f"===== Nothing AirShare v{APP_VERSION} starting =====")
     if not acquire_single_instance_lock():
         print("[Startup] Another Nothing AirShare instance is already running; exiting.")
-        send_mac_notification("Nothing AirShare", "Already running — look for the dot in your menu bar.")
+        send_mac_notification("Nothing AirShare", "Already running — look for the dot in your menu bar.", wait=True)
         return
 
     # Disable ADB's built-in mDNS to prevent duplicate device connections
