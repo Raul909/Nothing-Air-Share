@@ -65,6 +65,9 @@ echo "→ Building standalone macOS App..."
 rm -rf __pycache__ build dist "Nothing AirShare.spec"
 pyinstaller --clean -y --noconsole --name "Nothing AirShare" unified_sync.py >/dev/null 2>&1
 plutil -insert LSUIElement -bool YES "dist/Nothing AirShare.app/Contents/Info.plist" >/dev/null 2>&1
+plutil -replace CFBundleShortVersionString -string "2.9.1" "dist/Nothing AirShare.app/Contents/Info.plist" >/dev/null 2>&1
+plutil -replace CFBundleVersion -string "2.9.1" "dist/Nothing AirShare.app/Contents/Info.plist" >/dev/null 2>&1
+plutil -replace CFBundleIdentifier -string "com.nothing.airshare.mac" "dist/Nothing AirShare.app/Contents/Info.plist" >/dev/null 2>&1
 
 echo "→ Installing to /Applications..."
 rm -rf "/Applications/Nothing AirShare.app"

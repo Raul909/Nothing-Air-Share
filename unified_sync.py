@@ -131,8 +131,8 @@ def _post_aux_key(key_code):
     Quartz.CGEventSetIntegerValueField(ev_up, Quartz.kCGEventSourceUserData, 0)
     Quartz.CGEventSetIntegerValueField(ev_up, Quartz.kCGKeyboardEventAutorepeat, 0)
     Quartz.CGEventSetIntegerValueField(ev_up, 109, (key_code << 16) | (0xb << 8))
-    Quartz.CGEventPost(Quartz.kCGSessionEventTap, ev_down)
-    Quartz.CGEventPost(Quartz.kCGSessionEventTap, ev_up)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_down)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_up)
 
 def simulate_key_combo(keycode, flags=None):
     if not _ax_ok(): return
@@ -1369,11 +1369,15 @@ def push_file_to_android(local_path):
 
 def trigger_phone_ring():
     print("[Find My Phone] Triggering phone alarm...")
+    if push_to_phones({"type": "find_phone"}):
+        print("[Find My Phone] Broadcast sent successfully over TCP session.")
+        return
+        
     res = subprocess.run(["adb", "shell", "am", "broadcast", "-a", "clipper.ring"], capture_output=True, text=True)
     if res.returncode == 0:
-        print("[Find My Phone] Broadcast sent successfully.")
+        print("[Find My Phone] Broadcast sent successfully via ADB fallback.")
     else:
-        print(f"[Find My Phone] Error sending broadcast: {res.stderr}")
+        print(f"[Find My Phone] Error sending broadcast via ADB: {res.stderr}")
 
 def run_local_command(cmd_id):
     commands_dict = {
