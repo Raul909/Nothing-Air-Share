@@ -8,6 +8,8 @@ import sqlite3
 import base64
 import socket
 import struct
+import hmac
+import shlex
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSWorkspace,
@@ -508,7 +510,7 @@ def handle_mac_incoming_connection(conn):
 
             msg_type = data.get("type", "file")
             if msg_type not in ("mouse_move", "ping", "pong"):
-                print(f"[TCP Server] Received command: {data}")
+                print(f"[TCP Server] Received command: {msg_type}")
 
             if msg_type == "hello":
                 # Promote this connection to a persistent duplex session so the
@@ -580,70 +582,107 @@ def handle_mac_incoming_connection(conn):
             pass
 
 
+def safe_filename(name, default="file.bin"):
+    """Reduce a peer-supplied file name to a plain basename so it can't escape the
+    destination folder ('../../.zshrc') or hide itself with a leading dot."""
+    name = os.path.basename(str(name or "").replace("\\", "/"))
+    name = "".join(c for c in name if c >= " " and c != "\x7f").strip().lstrip(".")
+    if not name:
+        return default
+    base, ext = os.path.splitext(name)
+    return base[:200] + ext[:20]
+
+
+def unique_path(dest_dir, filename):
+    """Return dest_dir/filename, adding _1, _2... until it doesn't collide."""
+    dest_path = os.path.join(dest_dir, filename)
+    base, ext = os.path.splitext(filename)
+    counter = 1
+    while os.path.exists(dest_path):
+        dest_path = os.path.join(dest_dir, f"{base}_{counter}{ext}")
+        counter += 1
+    return dest_path
+
+
+ACCEPT_PROMPT_SCRIPT = '''on run argv
+tell application "System Events"
+    activate
+    set r to display dialog (item 1 of argv) with title "Nothing AirShare" buttons {"Decline", "Accept"} default button "Accept" giving up after 100
+end tell
+if gave up of r then return "Decline"
+return button returned of r
+end run'''
+
+
 def handle_incoming_file_data(conn, metadata):
     try:
-        sender = metadata.get("senderName", "Unknown Device")
-        filename = metadata.get("fileName", "file.bin")
-        filesize = metadata.get("fileSize", 0)
-        provided_pin = metadata.get("pin", "")
+        sender = str(metadata.get("senderName", "Unknown Device"))[:64]
+        filename = safe_filename(metadata.get("fileName"))
+        filesize = int(metadata.get("fileSize", 0) or 0)
+        provided_pin = str(metadata.get("pin", ""))
 
         config = load_config()
-        expected_pin = config.get("security_pin", "1234")
-        if provided_pin != expected_pin:
+        expected_pin = str(config.get("security_pin", "1234"))
+        if filesize < 0 or not hmac.compare_digest(provided_pin, expected_pin):
             print("[P2P Receiver] Unauthorized transfer attempt (Invalid PIN)")
-            conn.send(bytes([0x02]))
+            conn.sendall(bytes([0x02]))
             return
 
         print(f"[P2P Receiver] Incoming file request from {sender}: {filename} ({filesize} bytes)")
 
-        # 3. Prompt user via AppleScript
+        # 3. Prompt user via AppleScript (text goes in as argv, see NOTIFY_SCRIPT)
         size_mb = filesize / 1024.0 / 1024.0
-        prompt_script = f'''
-        tell application "System Events"
-            activate
-            display dialog "Incoming file share from {sender}\n\nFile: {filename}\nSize: {size_mb:.2f} MB\n\nDo you want to accept this file?" with title "Nothing AirShare" buttons {{"Decline", "Accept"}} default button "Accept"
-        end tell
-        '''
-        proc = subprocess.run(["osascript", "-e", prompt_script], capture_output=True, text=True)
-        accepted = "Accept" in proc.stdout
+        prompt = (f"Incoming file share from {sender}\n\nFile: {filename}\n"
+                  f"Size: {size_mb:.2f} MB\n\nDo you want to accept this file?")
+        try:
+            proc = subprocess.run(["osascript", "-e", ACCEPT_PROMPT_SCRIPT, prompt],
+                                  capture_output=True, text=True, timeout=120)
+            accepted = proc.stdout.strip() == "Accept"
+        except subprocess.TimeoutExpired:
+            accepted = False
 
         # 4. Respond with approval code
         if accepted:
-            conn.send(bytes([0x01]))  # Accept
+            conn.sendall(bytes([0x01]))  # Accept
             print("[P2P Receiver] User accepted the transfer. Receiving stream...")
             send_mac_notification("Nothing AirShare", f"Receiving '{filename}' from {sender}...")
 
-            # 5. Receive stream
-            dest_dir = DROP_ZONE_MAC
-            dest_path = os.path.join(dest_dir, filename)
-
-            # Prevent file collisions
-            base, ext = os.path.splitext(filename)
-            counter = 1
-            while os.path.exists(dest_path):
-                dest_path = os.path.join(dest_dir, f"{base}_{counter}{ext}")
-                counter += 1
-
-            with open(dest_path, 'wb') as f:
-                received = 0
-                while received < filesize:
-                    to_read = min(262144, filesize - received)  # 256KB buffer (L5)
-                    chunk = conn.recv(to_read)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    received += len(chunk)
+            # 5. Receive into a hidden .part file and only reveal it once complete,
+            # so an interrupted transfer never leaves a truncated file behind.
+            dest_path = unique_path(DROP_ZONE_MAC, filename)
+            part_path = os.path.join(DROP_ZONE_MAC, f".{os.path.basename(dest_path)}.part")
+            received = 0
+            try:
+                with open(part_path, 'wb') as f:
+                    while received < filesize:
+                        to_read = min(262144, filesize - received)  # 256KB buffer (L5)
+                        chunk = conn.recv(to_read)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        received += len(chunk)
+                if received != filesize:
+                    raise ConnectionError(f"stream ended after {received}/{filesize} bytes")
+                ignore_drop_path(dest_path)
+                os.replace(part_path, dest_path)
+            except Exception:
+                try:
+                    os.remove(part_path)
+                except OSError:
+                    pass
+                raise
 
             print(f"[P2P Receiver] Successfully received: {dest_path}")
-            
+
             # Import to macOS Spotlight index and notify
-            subprocess.run(["mdimport", dest_path], capture_output=True)
+            subprocess.run(["mdimport", dest_path], capture_output=True, timeout=30)
             send_mac_notification("Nothing AirShare Success", f"Received '{os.path.basename(dest_path)}' from {sender}")
         else:
-            conn.send(bytes([0x02]))  # Decline
+            conn.sendall(bytes([0x02]))  # Decline
             print("[P2P Receiver] User declined the transfer.")
     except Exception as e:
         print(f"[P2P Receiver Error] Connection failed: {e}")
+        send_mac_notification("Nothing AirShare Error", "File transfer from phone failed.")
 
 
 def mac_send_file_to_peer(file_path, device_name, host, port):
@@ -805,12 +844,15 @@ class ClipboardHistoryDB:
             return []
 
 # Notification Helpers
+# Untrusted text (clipboard contents, peer-supplied file names) is passed to
+# osascript as argv, never spliced into the script source — quote-escaping alone
+# can be bypassed with a backslash and turned into `do shell script`.
+NOTIFY_SCRIPT = 'on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run'
+
 def send_mac_notification(title, message):
     try:
-        escaped_title = title.replace('"', '\\"')
-        escaped_msg = message.replace('"', '\\"')
-        script = f'display notification "{escaped_msg}" with title "{escaped_title}"'
-        subprocess.run(["osascript", "-e", script], capture_output=True)
+        subprocess.run(["osascript", "-e", NOTIFY_SCRIPT, str(title), str(message)],
+                       capture_output=True, timeout=10)
     except Exception as e:
         print(f"[Notification] Failed to send macOS notification: {e}")
 
@@ -825,20 +867,39 @@ def send_android_notification(title, message):
     except Exception as e:
         print(f"[Notification] Failed to send Android notification: {e}")
 
+# Files we wrote into a watched folder ourselves (received from the phone). The
+# drop-folder watcher skips these so they don't bounce straight back to the phone.
+_ignored_drop_paths = {}
+_ignored_drop_lock = threading.Lock()
+
+def ignore_drop_path(path, ttl=60):
+    now = time.time()
+    with _ignored_drop_lock:
+        for p, expiry in list(_ignored_drop_paths.items()):
+            if expiry < now:
+                del _ignored_drop_paths[p]
+        _ignored_drop_paths[os.path.realpath(path)] = now + ttl
+
+def is_ignored_drop_path(path):
+    with _ignored_drop_lock:
+        expiry = _ignored_drop_paths.get(os.path.realpath(path))
+    return expiry is not None and expiry > time.time()
+
 # Smart File Routing and Spotlight Import
-def pull_file_from_android(filename):
-    remote_path = f"/sdcard/Android/data/com.nothing.airshare/files/ToMac/{filename}"
+def pull_file_from_android(remote_name):
+    remote_path = f"/sdcard/Android/data/com.nothing.airshare/files/ToMac/{remote_name}"
+    filename = safe_filename(remote_name)
     temp_local_path = os.path.join(TEMP_DIR, filename)
-    
+
     try:
         # Pull file to temp folder first to avoid half-written files
-        res = subprocess.run(["adb", "pull", remote_path, temp_local_path], capture_output=True, timeout=60)
+        res = subprocess.run(["adb", "pull", remote_path, temp_local_path], capture_output=True, timeout=600)
         if res.returncode != 0:
-            print(f"[Drop] Failed to pull {filename}: {res.stderr.decode()}")
+            print(f"[Drop] Failed to pull {filename}: {res.stderr.decode(errors='replace')}")
             return
-            
-        # Delete from Android
-        subprocess.run(["adb", "shell", f"rm \"{remote_path}\""], capture_output=True)
+
+        # Delete from Android (quoted: the name was chosen on the phone)
+        subprocess.run(["adb", "shell", f"rm -f {shlex.quote(remote_path)}"], capture_output=True, timeout=15)
         
         # Smart routing based on file extension
         ext = os.path.splitext(filename)[1].lower()
@@ -855,15 +916,9 @@ def pull_file_from_android(filename):
             dest_dir = downloads_dir
             
         os.makedirs(dest_dir, exist_ok=True)
-        final_path = os.path.join(dest_dir, filename)
-        
         # Prevent file overwrite by appending suffix
-        base, extension = os.path.splitext(filename)
-        counter = 1
-        while os.path.exists(final_path):
-            final_path = os.path.join(dest_dir, f"{base}_{counter}{extension}")
-            counter += 1
-            
+        final_path = unique_path(dest_dir, filename)
+        ignore_drop_path(final_path)
         shutil.move(temp_local_path, final_path)
         print(f"[Drop] Pulled and routed {filename} to {final_path}")
         
@@ -892,7 +947,7 @@ class MacDropHandler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory:
             filename = os.path.basename(event.src_path)
-            if filename.startswith('.'):
+            if filename.startswith('.') or is_ignored_drop_path(event.src_path):
                 return
             print(f"[Drop] New local file detected: {filename}")
             threading.Thread(target=self.push_to_android, args=(event.src_path,)).start()
@@ -1000,7 +1055,7 @@ def apply_incoming_clip(data):
         return
     with sync_state_lock:
         if text != CURRENT_CLIPBOARD_CONTENT:
-            print(f"[Phone] Clipboard changed: {text[:20]}...")
+            print(f"[Phone] Clipboard changed ({len(text)} chars)")
             CURRENT_CLIPBOARD_CONTENT = text
             if db:
                 db.add_item(text)
@@ -1045,7 +1100,7 @@ def push_to_android_clipboard(item):
                 f"am broadcast -n '{HELPER_RECEIVER}' -a clipper.set -f 32 -e text '{escaped_text}'"
             ], capture_output=True, text=True)
             if res.returncode == 0:
-                print(f"[Sync] Text pushed to Phone: {item['data'][:30]}...")
+                print(f"[Sync] Text pushed to Phone ({len(item['data'])} chars)")
             else:
                 print(f"[Sync Warning] Failed to push clipboard: {res.stderr.strip() or res.stdout.strip()}")
         elif item["type"] == "image":
@@ -1061,7 +1116,7 @@ def sync_clipboard_to_phone(item):
     (instant, no ADB); falls back to the ADB path when no session is active."""
     if item["type"] == "text":
         if push_to_phones({"type": "clip", "format": "text", "data": item["data"]}):
-            print(f"[Sync] Text pushed to phone over session: {item['data'][:30]}...")
+            print(f"[Sync] Text pushed to phone over session ({len(item['data'])} chars)")
             return
     # No live session (or image payload) — fall back to ADB.
     push_to_android_clipboard(item)
@@ -1106,7 +1161,7 @@ def run_adb_connect_safe(address):
             adb_connecting = False
 
 def run_adb_pair(address, code):
-    print(f"[ADB] Attempting to pair with: {address} using code {code}")
+    print(f"[ADB] Attempting to pair with: {address}")
     proc = subprocess.Popen(
         ["adb", "pair", address],
         stdin=subprocess.PIPE,
@@ -1292,7 +1347,7 @@ done
                         decoded_val = base64.b64decode(encoded_val).decode('utf-8')
                         with sync_state_lock:
                             if decoded_val != CURRENT_CLIPBOARD_CONTENT:
-                                print(f"[Android] Clipboard changed: {decoded_val[:20]}...")
+                                print(f"[Android] Clipboard changed ({len(decoded_val)} chars)")
                                 CURRENT_CLIPBOARD_CONTENT = decoded_val
                                 db.add_item(CURRENT_CLIPBOARD_CONTENT)
                                 set_mac_clipboard("text", decoded_val)
@@ -2024,7 +2079,7 @@ class ApplicationBootstrap(NSObject):
         text = sender.representedObject()
         if text:
             set_mac_clipboard("text", text)
-            print(f"[UI] Restored from history: {text[:20]}...")
+            print(f"[UI] Restored from history ({len(text)} chars)")
 
     def sendFileToDevice_(self, sender):
         device_name = sender.representedObject()
@@ -2206,7 +2261,7 @@ class ApplicationBootstrap(NSObject):
                 threading.Thread(target=self.run_adb_pair_bg, args=(address, code)).start()
 
     def run_adb_pair_bg(self, address, code):
-        print(f"[ADB] Pairing with {address} using code {code}...")
+        print(f"[ADB] Pairing with {address}...")
         send_mac_notification("Nothing AirShare", f"Pairing with {address}...")
         success, out = run_adb_pair(address, code)
         if success:
