@@ -2,12 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.nothing.airshare">
 
-    <permission
-        android:name="com.nothing.airshare.permission.SYNC_COMMAND"
-        android:protectionLevel="signature" />
-    
-    <uses-permission android:name="com.nothing.airshare.permission.SYNC_COMMAND" />
-
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -63,9 +57,13 @@
             </intent-filter>
         </receiver>
 
+        <!-- Commands arrive from the Mac via `adb shell am broadcast`. DUMP is held
+             by the ADB shell user but can't be granted to ordinary apps, so other
+             apps still can't read or set the clipboard through this receiver. (The
+             old app-signature permission also blocked adb, so these never fired.) -->
         <receiver
             android:name=".ClipboardReceiver"
-            android:permission="com.nothing.airshare.permission.SYNC_COMMAND"
+            android:permission="android.permission.DUMP"
             android:exported="true">
             <intent-filter>
                 <action android:name="clipper.get" />

@@ -47,14 +47,16 @@ class NsdHelper(private val context: Context, private val listener: NsdListener)
 
     fun discoverServices() {
         discoveryListener = object : NsdManager.DiscoveryListener {
+            // stopServiceDiscovery() on a listener that never started (or already
+            // failed to stop) throws IllegalArgumentException on the NSD thread,
+            // which used to take the whole app down with it.
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
                 Log.e("NSD", "Discovery start failed: $errorCode")
-                nsdManager.stopServiceDiscovery(this)
+                discoveryListener = null
             }
 
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
                 Log.e("NSD", "Discovery stop failed: $errorCode")
-                nsdManager.stopServiceDiscovery(this)
             }
 
             override fun onDiscoveryStarted(serviceType: String) {
@@ -101,11 +103,10 @@ class NsdHelper(private val context: Context, private val listener: NsdListener)
 
                 override fun onServiceResolved(resolvedServiceInfo: NsdServiceInfo) {
                     Log.d("NSD", "Resolve succeeded: ${resolvedServiceInfo.serviceName} at ${resolvedServiceInfo.host}:${resolvedServiceInfo.port}")
-                    listener.onDeviceDiscovered(
-                        resolvedServiceInfo.serviceName,
-                        resolvedServiceInfo.host,
-                        resolvedServiceInfo.port
-                    )
+                    val host: InetAddress? = resolvedServiceInfo.host
+                    if (host != null) {
+                        listener.onDeviceDiscovered(resolvedServiceInfo.serviceName, host, resolvedServiceInfo.port)
+                    }
                     isResolving.set(false)
                     resolveNext()
                 }
@@ -132,5 +133,8 @@ class NsdHelper(private val context: Context, private val listener: NsdListener)
         } catch (e: Exception) {
             Log.e("NSD", "Stop discovery failed: ${e.message}")
         }
+        registrationListener = null
+        discoveryListener = null
+        resolveQueue.clear()
     }
 }
